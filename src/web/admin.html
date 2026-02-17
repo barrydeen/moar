@@ -537,9 +537,29 @@
                 selectedPreset: null,
                 simpleFormPubkeys: [],
                 statusInfo: { domain: 'localhost', port: 8080 },
-                form: this.emptyFormData(),
+                form: {
+                    id: '',
+                    name: '',
+                    description: '',
+                    subdomain: '',
+                    db_path: '',
+                    db_path_manual: false,
+                    write_require_auth: false,
+                    write_allowed_pubkeys: [],
+                    write_blocked_pubkeys: [],
+                    write_tagged_pubkeys: [],
+                    read_require_auth: false,
+                    read_allowed_pubkeys: [],
+                    allowed_kinds: [],
+                    blocked_kinds: [],
+                    min_pow: '',
+                    max_content_length: '',
+                    writes_per_minute: '',
+                    reads_per_minute: '',
+                    page_html: '',
+                },
 
-                emptyFormData() {
+                emptyForm() {
                     return {
                         id: '',
                         name: '',
@@ -561,10 +581,6 @@
                         reads_per_minute: '',
                         page_html: '',
                     };
-                },
-
-                emptyForm() {
-                    return this.emptyFormData();
                 },
 
                 // ---- Preset helpers ----
