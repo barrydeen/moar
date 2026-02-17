@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-set -e
-
 # ─────────────────────────────────────────────────────────────
 #  MOAR Installer — Modern TUI
+#  Wrapped in main() for `curl | bash` compatibility
 # ─────────────────────────────────────────────────────────────
+
+main() {
+
+set -e
 
 REPO_URL="https://github.com/barrydeen/moar.git"
 INSTALL_DIR="$HOME/moar"
@@ -413,3 +416,8 @@ box_line "  ${DIM}Update${RESET}        git pull && $COMPOSE_CMD up -d --build"
 box_empty
 box_bot
 blank
+
+}
+
+# Run main — must be at the very end for curl|bash to work
+main "$@"
