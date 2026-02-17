@@ -6,7 +6,7 @@ admin_pubkey = "your-hex-pubkey-here"
 # Place {relay_id}.html files here, or edit via the admin UI
 pages_dir = "pages"
 
-# DM Relay - Authenticated read/write, restricted to specific event kinds
+# DM Relay - Anyone can write if tagging your pubkey, only you can read
 [relays.dms]
 name = "DM Relay"
 description = "Private direct messages"
@@ -14,8 +14,9 @@ subdomain = "dm"
 db_path = "data/dm.mdb"
 
 [relays.dms.policy.write]
-require_auth = true
-allowed_pubkeys = ["npub1..."]
+require_auth = false
+# Events must tag one of these pubkeys to be accepted
+tagged_pubkeys = ["npub1..."]
 
 [relays.dms.policy.read]
 require_auth = true
@@ -27,6 +28,20 @@ allowed_kinds = [
     1059,
     5,
 ]
+
+# Inbox Relay - Anyone can write if tagging your pubkey, open read
+[relays.inbox]
+name = "Inbox"
+description = "Receive mentions and replies"
+subdomain = "inbox"
+db_path = "data/inbox.mdb"
+
+[relays.inbox.policy.write]
+tagged_pubkeys = ["npub1..."]
+
+[relays.inbox.policy.read]
+
+[relays.inbox.policy.events]
 
 # Public Relay - Open to everyone
 [relays.public]
