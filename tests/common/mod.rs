@@ -1,6 +1,7 @@
 use moar::config::{PolicyConfig, RelayConfig};
 use moar::policy::PolicyEngine;
 use moar::server::{create_relay_router, RelayState};
+use moar::stats::RelayStats;
 use moar::storage::NostrStore;
 use nostr::{Event, Filter, JsonUtil, RelayMessage};
 use std::collections::HashMap;
@@ -83,6 +84,20 @@ impl NostrStore for MockStore {
         results.truncate(limit);
         Ok(results)
     }
+
+    fn iter_all(&self) -> moar::error::Result<Vec<Event>> {
+        let events = self.events.lock().unwrap();
+        Ok(events.values().cloned().collect())
+    }
+
+    fn event_count(&self) -> moar::error::Result<u64> {
+        let events = self.events.lock().unwrap();
+        Ok(events.len() as u64)
+    }
+
+    fn db_path(&self) -> &str {
+        "/tmp/moar-test-unused"
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -99,13 +114,18 @@ pub async fn spawn_relay(policy: PolicyConfig) -> (u16, Arc<MockStore>) {
         subdomain: "test".into(),
         db_path: "/tmp/moar-test-unused".into(),
         policy,
+        nip11: Default::default(),
     };
+    let stats = Arc::new(RelayStats::new());
     let state = Arc::new(RelayState::new(
         config,
         store_dyn,
         policy_engine,
         "test".into(),
         std::path::PathBuf::from("/tmp/moar-test-pages"),
+        String::new(),
+        String::new(),
+        stats,
     ));
     let app = create_relay_router(state);
 

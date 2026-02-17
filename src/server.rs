@@ -12,12 +12,14 @@ use futures::{sink::SinkExt, stream::StreamExt};
 use nostr::{ClientMessage, Event, JsonUtil, RelayMessage};
 use serde::Serialize;
 use std::path::PathBuf;
+use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::config::RelayConfig;
 use crate::policy::{PolicyEngine, PolicyResult};
+use crate::stats::RelayStats;
 use crate::storage::NostrStore;
 
 pub struct RelayState {
@@ -29,6 +31,7 @@ pub struct RelayState {
     pub admin_pubkey: String,
     pub relay_url: String,
     pub tx: broadcast::Sender<Event>,
+    pub stats: Arc<RelayStats>,
 }
 
 impl RelayState {
@@ -40,6 +43,7 @@ impl RelayState {
         pages_dir: PathBuf,
         admin_pubkey: String,
         relay_url: String,
+        stats: Arc<RelayStats>,
     ) -> Self {
         let (tx, _rx) = broadcast::channel(100);
         Self {
@@ -51,7 +55,16 @@ impl RelayState {
             admin_pubkey,
             relay_url,
             tx,
+            stats,
         }
+    }
+}
+
+struct ConnectionGuard(Arc<RelayStats>);
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        self.0.active_connections.fetch_sub(1, Relaxed);
     }
 }
 
@@ -236,8 +249,23 @@ fn build_nip11(state: &RelayState) -> Nip11Document {
     }
 }
 
+async fn send_msg(
+    sender: &mut futures::stream::SplitSink<WebSocket, Message>,
+    msg: String,
+    stats: &RelayStats,
+) {
+    stats.bytes_tx.fetch_add(msg.len() as u64, Relaxed);
+    let _ = sender.send(Message::Text(msg.into())).await;
+}
+
 async fn handle_socket(socket: WebSocket, state: Arc<RelayState>) {
     let (mut sender, mut receiver) = socket.split();
+    let stats = &state.stats;
+
+    // Connection tracking
+    stats.active_connections.fetch_add(1, Relaxed);
+    stats.total_connections.fetch_add(1, Relaxed);
+    let _guard = ConnectionGuard(stats.clone());
 
     // NIP-42: the authenticated pubkey for this connection (None until AUTH)
     let authed_pubkey: Option<nostr::PublicKey> = None;
@@ -249,6 +277,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<RelayState>) {
             Some(msg) = receiver.next() => {
                 match msg {
                     Ok(Message::Text(text)) => {
+                        stats.bytes_rx.fetch_add(text.len() as u64, Relaxed);
                         match ClientMessage::from_json(&text) {
                             Ok(client_msg) => {
                                 match client_msg {
@@ -257,17 +286,19 @@ async fn handle_socket(socket: WebSocket, state: Arc<RelayState>) {
                                             PolicyResult::Allow => {
                                                 if let Err(e) = state.store.save_event(&event) {
                                                     tracing::error!("Failed to save event: {}", e);
-                                                    let _ = sender.send(Message::Text(RelayMessage::ok(event.id, false, "error saving").as_json().into())).await;
+                                                    send_msg(&mut sender, RelayMessage::ok(event.id, false, "error saving").as_json(), stats).await;
                                                 } else {
-                                                    let _ = sender.send(Message::Text(RelayMessage::ok(event.id, true, "").as_json().into())).await;
+                                                    stats.events_saved.fetch_add(1, Relaxed);
+                                                    send_msg(&mut sender, RelayMessage::ok(event.id, true, "").as_json(), stats).await;
                                                     let _ = state.tx.send(event.as_ref().clone());
                                                 }
                                             }
                                             PolicyResult::Deny(reason) => {
-                                                let _ = sender.send(Message::Text(RelayMessage::ok(event.id, false, &format!("blocked: {}", reason)).as_json().into())).await;
+                                                stats.events_rejected.fetch_add(1, Relaxed);
+                                                send_msg(&mut sender, RelayMessage::ok(event.id, false, &format!("blocked: {}", reason)).as_json(), stats).await;
                                             }
                                             PolicyResult::AuthRequired => {
-                                                let _ = sender.send(Message::Text(RelayMessage::ok(event.id, false, "auth-required: NIP-42 authentication required").as_json().into())).await;
+                                                send_msg(&mut sender, RelayMessage::ok(event.id, false, "auth-required: NIP-42 authentication required").as_json(), stats).await;
                                                 // TODO: send AUTH challenge
                                             }
                                         }
@@ -279,12 +310,12 @@ async fn handle_socket(socket: WebSocket, state: Arc<RelayState>) {
                                             match state.policy.can_read(filter, authed_pubkey.as_ref()) {
                                                 PolicyResult::Allow => {}
                                                 PolicyResult::Deny(reason) => {
-                                                    let _ = sender.send(Message::Text(RelayMessage::notice(format!("blocked: {}", reason)).as_json().into())).await;
+                                                    send_msg(&mut sender, RelayMessage::notice(format!("blocked: {}", reason)).as_json(), stats).await;
                                                     blocked = true;
                                                     break;
                                                 }
                                                 PolicyResult::AuthRequired => {
-                                                    let _ = sender.send(Message::Text(RelayMessage::notice("auth-required: NIP-42 authentication required").as_json().into())).await;
+                                                    send_msg(&mut sender, RelayMessage::notice("auth-required: NIP-42 authentication required").as_json(), stats).await;
                                                     blocked = true;
                                                     break;
                                                 }
@@ -295,17 +326,18 @@ async fn handle_socket(socket: WebSocket, state: Arc<RelayState>) {
                                             for filter in filters {
                                                 match state.store.query(&filter) {
                                                     Ok(events) => {
+                                                        stats.queries_served.fetch_add(1, Relaxed);
                                                         for event in events {
-                                                            let _ = sender.send(Message::Text(RelayMessage::event(subscription_id.clone(), event).as_json().into())).await;
+                                                            send_msg(&mut sender, RelayMessage::event(subscription_id.clone(), event).as_json(), stats).await;
                                                         }
                                                     }
                                                     Err(e) => {
                                                         tracing::error!("Query failed: {}", e);
-                                                        let _ = sender.send(Message::Text(RelayMessage::notice(format!("error: {}", e)).as_json().into())).await;
+                                                        send_msg(&mut sender, RelayMessage::notice(format!("error: {}", e)).as_json(), stats).await;
                                                     }
                                                 }
                                             }
-                                            let _ = sender.send(Message::Text(RelayMessage::eose(subscription_id).as_json().into())).await;
+                                            send_msg(&mut sender, RelayMessage::eose(subscription_id).as_json(), stats).await;
                                         }
                                     }
                                     ClientMessage::Close(_sub_id) => {

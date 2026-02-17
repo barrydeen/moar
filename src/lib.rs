@@ -5,5 +5,6 @@ pub mod error;
 pub mod gateway;
 pub mod policy;
 pub mod server;
+pub mod stats;
 pub mod storage;
 pub mod wot;

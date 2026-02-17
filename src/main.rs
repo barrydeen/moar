@@ -2,11 +2,13 @@ use moar::blossom::store::BlobStore;
 use moar::config::MoarConfig;
 use moar::gateway::start_gateway;
 use moar::policy::PolicyEngine;
+use moar::stats::{RelayStats, TimeSeriesRing};
 use moar::storage::lmdb::LmdbStore;
 use moar::wot::WotManager;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 #[derive(Parser)]
 #[command(name = "moar")]
@@ -58,7 +60,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     None => None,
                 };
                 let policy = Arc::new(PolicyEngine::new(relay_conf.policy.clone(), write_wot, read_wot));
-                processed_relays.insert(key, (relay_conf, store, policy));
+                let stats = Arc::new(RelayStats::new());
+                let ts_ring = Arc::new(RwLock::new(TimeSeriesRing::new()));
+                processed_relays.insert(key, (relay_conf, store, policy, stats, ts_ring));
             }
 
             let mut processed_blossoms = std::collections::HashMap::new();
