@@ -1,0 +1,104 @@
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MoarConfig {
+    pub domain: String,
+    pub port: u16,
+    pub relays: HashMap<String, RelayConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelayConfig {
+    pub name: String,
+    pub description: Option<String>,
+    pub subdomain: String,
+    pub db_path: String,
+    #[serde(default)]
+    pub policy: PolicyConfig,
+}
+
+/// Composable policy configuration — every field is optional and defaults to
+/// the most permissive value.  Users only specify what they want to restrict.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PolicyConfig {
+    #[serde(default)]
+    pub write: WritePolicy,
+    #[serde(default)]
+    pub read: ReadPolicy,
+    #[serde(default)]
+    pub events: EventPolicy,
+    pub rate_limit: Option<RateLimitConfig>,
+}
+
+/// Controls who is allowed to publish events (EVENT messages).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WritePolicy {
+    /// If true, the client must complete NIP-42 AUTH before sending EVENTs.
+    #[serde(default)]
+    pub require_auth: bool,
+    /// If set, only these pubkeys may write.  `None` = anyone can write.
+    pub allowed_pubkeys: Option<Vec<String>>,
+    /// If set, these pubkeys are explicitly blocked from writing.
+    pub blocked_pubkeys: Option<Vec<String>>,
+}
+
+impl Default for WritePolicy {
+    fn default() -> Self {
+        Self {
+            require_auth: false,
+            allowed_pubkeys: None,
+            blocked_pubkeys: None,
+        }
+    }
+}
+
+/// Controls who is allowed to query events (REQ messages).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadPolicy {
+    /// If true, the client must complete NIP-42 AUTH before sending REQs.
+    #[serde(default)]
+    pub require_auth: bool,
+    /// If set, only these pubkeys may read.  `None` = anyone can read.
+    pub allowed_pubkeys: Option<Vec<String>>,
+}
+
+impl Default for ReadPolicy {
+    fn default() -> Self {
+        Self {
+            require_auth: false,
+            allowed_pubkeys: None,
+        }
+    }
+}
+
+/// Controls which events are accepted based on their content.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventPolicy {
+    /// If set, only these event kinds are accepted.
+    pub allowed_kinds: Option<Vec<u64>>,
+    /// If set, these event kinds are rejected.
+    pub blocked_kinds: Option<Vec<u64>>,
+    /// Minimum proof-of-work difficulty bits required (NIP-13).
+    pub min_pow: Option<u8>,
+    /// Maximum `content` field length in bytes.
+    pub max_content_length: Option<usize>,
+}
+
+impl Default for EventPolicy {
+    fn default() -> Self {
+        Self {
+            allowed_kinds: None,
+            blocked_kinds: None,
+            min_pow: None,
+            max_content_length: None,
+        }
+    }
+}
+
+/// Per-relay rate limiting configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitConfig {
+    pub writes_per_minute: Option<u32>,
+    pub reads_per_minute: Option<u32>,
+}

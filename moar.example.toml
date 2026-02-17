@@ -1,0 +1,55 @@
+domain = "localhost"
+port = 8080
+
+# DM Relay - Authenticated read/write, restricted to specific event kinds
+[relays.dms]
+name = "DM Relay"
+description = "Private direct messages"
+subdomain = "dm"
+db_path = "data/dm.mdb"
+
+[relays.dms.policy.write]
+require_auth = true
+allowed_pubkeys = ["npub1..."]
+
+[relays.dms.policy.read]
+require_auth = true
+allowed_pubkeys = ["npub1..."]
+
+[relays.dms.policy.events]
+allowed_kinds = [
+    4,
+    1059,
+    5,
+]
+
+# Public Relay - Open to everyone
+[relays.public]
+name = "Public Relay"
+description = "A fully open relay"
+subdomain = "www"
+db_path = "data/public.mdb"
+
+[relays.public.policy.write]
+require_auth = false
+
+[relays.public.policy.read]
+require_auth = false
+
+[relays.public.policy.events]
+
+# Outbox Relay - Public read, whitelisted write
+[relays.outbox]
+name = "My Outbox"
+description = "Only I can post here"
+subdomain = "outbox"
+db_path = "data/outbox.mdb"
+
+[relays.outbox.policy.write]
+require_auth = false
+allowed_pubkeys = ["npub1..."]
+
+[relays.outbox.policy.read]
+require_auth = false
+
+[relays.outbox.policy.events]

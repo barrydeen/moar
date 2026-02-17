@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MOAR - Login</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
+    <style>
+        [x-cloak] { display: none !important; }
+    </style>
+</head>
+<body class="bg-gray-950 text-white min-h-screen flex items-center justify-center" x-cloak x-data="{ loading: false, error: '' }">
+    <div class="text-center">
+        <h1 class="text-4xl font-bold tracking-tight mb-2">MOAR</h1>
+        <p class="text-gray-400 mb-8">Mother Of All Relays</p>
+
+        <div x-show="error" class="bg-red-900/50 border border-red-700 text-red-200 px-4 py-3 rounded-lg mb-4 text-sm max-w-xs mx-auto" x-text="error"></div>
+
+        <button
+            @click="login()"
+            :disabled="loading"
+            class="bg-white text-gray-900 px-6 py-3 rounded-lg font-medium hover:bg-gray-100 transition disabled:opacity-50">
+            <span x-show="!loading">Login with Nostr</span>
+            <span x-show="loading">Signing in...</span>
+        </button>
+    </div>
+
+    <script>
+        async function login() {
+            const app = Alpine.$data(document.querySelector('[x-data]'));
+            app.error = '';
+            app.loading = true;
+
+            if (!window.nostr) {
+                app.error = 'No Nostr extension found. Install nos2x or Alby.';
+                app.loading = false;
+                return;
+            }
+
+            try {
+                const pubkey = await window.nostr.getPublicKey();
+                const event = {
+                    kind: 27235,
+                    created_at: Math.floor(Date.now() / 1000),
+                    tags: [
+                        ['u', window.location.origin + '/api/login'],
+                        ['method', 'POST']
+                    ],
+                    content: ''
+                };
+                const signed = await window.nostr.signEvent(event);
+
+                const res = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(signed)
+                });
+
+                if (res.ok) {
+                    window.location.href = '/admin';
+                } else {
+                    app.error = 'Login failed: ' + await res.text();
+                }
+            } catch (e) {
+                console.error(e);
+                app.error = 'Login error: ' + e.message;
+            } finally {
+                app.loading = false;
+            }
+        }
+    </script>
+</body>
+</html>

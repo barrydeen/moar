@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MOAR Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {}
+            }
+        }
+    </script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
+    <style>
+        [x-cloak] { display: none !important; }
+    </style>
+</head>
+<body class="bg-gray-950 text-white min-h-screen" x-cloak x-data="adminApp()" x-init="init()">
+
+    <!-- Top Bar -->
+    <header class="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
+        <h1 class="text-xl font-bold tracking-tight">MOAR Admin</h1>
+        <button @click="logout()" class="text-sm text-gray-400 hover:text-white transition">Logout</button>
+    </header>
+
+    <!-- Restart Banner -->
+    <div x-show="pendingRestart" class="bg-amber-900/50 border border-amber-700 text-amber-200 px-6 py-3 text-sm">
+        Configuration saved. Restart MOAR to apply changes.
+    </div>
+
+    <!-- Relay List View -->
+    <main x-show="currentView === 'list'" class="max-w-4xl mx-auto px-6 py-8">
+        <div class="flex items-center justify-between mb-6">
+            <h2 class="text-lg font-semibold">Relays</h2>
+            <button @click="showCreateForm()" class="bg-white text-gray-900 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-100 transition">
+                Create New Relay
+            </button>
+        </div>
+
+        <div class="grid gap-4">
+            <template x-for="relay in relays" :key="relay.id">
+                <div class="bg-gray-900 border border-gray-800 rounded-lg p-5">
+                    <div class="flex items-start justify-between mb-2">
+                        <div>
+                            <h3 class="font-semibold text-white" x-text="relay.name"></h3>
+                            <p class="text-sm text-gray-400 mt-1" x-text="relay.description || 'No description'"></p>
+                        </div>
+                    </div>
+                    <div class="mt-3 mb-3">
+                        <span class="inline-block bg-gray-800 text-gray-300 text-xs font-mono rounded-full px-3 py-1" x-text="'wss://' + relay.subdomain + '.' + statusInfo.domain + ':' + statusInfo.port"></span>
+                    </div>
+                    <div class="flex flex-wrap gap-1.5 mb-4">
+                        <template x-if="relay.policy?.write?.require_auth">
+                            <span class="bg-gray-800 text-gray-300 rounded-full px-2 py-1 text-xs">Write Auth</span>
+                        </template>
+                        <template x-if="relay.policy?.read?.require_auth">
+                            <span class="bg-gray-800 text-gray-300 rounded-full px-2 py-1 text-xs">Read Auth</span>
+                        </template>
+                        <template x-if="relay.policy?.write?.allowed_pubkeys?.length">
+                            <span class="bg-gray-800 text-gray-300 rounded-full px-2 py-1 text-xs" x-text="relay.policy.write.allowed_pubkeys.length + ' write keys'"></span>
+                        </template>
+                        <template x-if="relay.policy?.events?.allowed_kinds?.length">
+                            <span class="bg-gray-800 text-gray-300 rounded-full px-2 py-1 text-xs" x-text="'Kinds: ' + relay.policy.events.allowed_kinds.join(', ')"></span>
+                        </template>
+                        <template x-if="relay.policy?.rate_limit">
+                            <span class="bg-gray-800 text-gray-300 rounded-full px-2 py-1 text-xs">Rate Limited</span>
+                        </template>
+                    </div>
+                    <div class="flex gap-3">
+                        <button @click="showEditForm(relay)" class="text-sm text-gray-400 hover:text-white border border-gray-700 rounded px-3 py-1.5 transition">Edit</button>
+                        <button @click="confirmDelete(relay)" class="text-sm text-red-400 hover:text-red-300 px-3 py-1.5 transition">Delete</button>
+                    </div>
+                </div>
+            </template>
+        </div>
+
+        <div x-show="relays.length === 0" class="text-center text-gray-500 py-12">
+            No relays configured. Create one to get started.
+        </div>
+    </main>
+
+    <!-- Create/Edit Form View -->
+    <main x-show="currentView === 'form'" class="max-w-2xl mx-auto px-6 py-8">
+        <button @click="currentView = 'list'" class="text-sm text-gray-400 hover:text-white mb-6 inline-flex items-center gap-1 transition">
+            &larr; Back to relays
+        </button>
+
+        <h2 class="text-lg font-semibold mb-6" x-text="editingRelay ? 'Edit Relay' : 'Create Relay'"></h2>
+
+        <!-- Basic Info -->
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 mb-4">
+            <h3 class="text-sm font-medium text-gray-400 mb-4">Basic Info</h3>
+
+            <template x-if="!editingRelay">
+                <div class="mb-4">
+                    <label class="block text-sm text-gray-400 mb-1">ID</label>
+                    <input type="text" x-model="form.id" placeholder="e.g. public, outbox, dms"
+                        class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+                    <p class="text-xs text-gray-500 mt-1">Alphanumeric, hyphens, underscores only. Cannot be changed later.</p>
+                </div>
+            </template>
+
+            <div class="mb-4">
+                <label class="block text-sm text-gray-400 mb-1">Name</label>
+                <input type="text" x-model="form.name" placeholder="My Relay"
+                    class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+            </div>
+
+            <div class="mb-4">
+                <label class="block text-sm text-gray-400 mb-1">Description</label>
+                <textarea x-model="form.description" rows="2" placeholder="Optional description"
+                    class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600"></textarea>
+            </div>
+
+            <div class="mb-4">
+                <label class="block text-sm text-gray-400 mb-1">Subdomain</label>
+                <input type="text" x-model="form.subdomain" placeholder="e.g. outbox"
+                    class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+                <p class="text-xs text-gray-500 mt-1" x-show="form.subdomain" x-text="'wss://' + form.subdomain + '.' + statusInfo.domain + ':' + statusInfo.port"></p>
+            </div>
+
+            <div>
+                <label class="block text-sm text-gray-400 mb-1">DB Path</label>
+                <input type="text" x-model="form.db_path" placeholder="data/relay.mdb"
+                    class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+            </div>
+        </div>
+
+        <!-- Auto-fill db_path from subdomain -->
+        <template x-effect="if (!editingRelay && form.subdomain && !form.db_path_manual) form.db_path = 'data/' + form.subdomain + '.mdb'"></template>
+
+        <!-- Write Policy -->
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 mb-4">
+            <h3 class="text-sm font-medium text-gray-400 mb-4">Write Policy</h3>
+
+            <div class="flex items-center justify-between mb-4">
+                <span class="text-sm">Require Auth</span>
+                <button @click="form.write_require_auth = !form.write_require_auth" class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors" :class="form.write_require_auth ? 'bg-white' : 'bg-gray-700'">
+                    <span class="inline-block h-4 w-4 rounded-full transition-transform" :class="form.write_require_auth ? 'translate-x-6 bg-gray-900' : 'translate-x-1 bg-gray-400'"></span>
+                </button>
+            </div>
+
+            <div class="mb-4" x-data="tagInput()" x-init="items = form.write_allowed_pubkeys">
+                <label class="block text-sm text-gray-400 mb-1">Allowed Pubkeys</label>
+                <div class="flex flex-wrap gap-1.5 mb-2">
+                    <template x-for="(item, index) in form.write_allowed_pubkeys" :key="index">
+                        <span class="bg-gray-700 text-gray-200 rounded px-2 py-1 text-xs inline-flex items-center gap-1">
+                            <span x-text="item.length > 16 ? item.slice(0, 12) + '...' + item.slice(-4) : item"></span>
+                            <button @click="form.write_allowed_pubkeys.splice(index, 1)" class="text-gray-400 hover:text-white">&times;</button>
+                        </span>
+                    </template>
+                </div>
+                <input type="text" placeholder="Enter pubkey and press Enter" @keydown.enter.prevent="addTag($event, form.write_allowed_pubkeys)"
+                    class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+            </div>
+
+            <div x-data="tagInput()">
+                <label class="block text-sm text-gray-400 mb-1">Blocked Pubkeys</label>
+                <div class="flex flex-wrap gap-1.5 mb-2">
+                    <template x-for="(item, index) in form.write_blocked_pubkeys" :key="index">
+                        <span class="bg-gray-700 text-gray-200 rounded px-2 py-1 text-xs inline-flex items-center gap-1">
+                            <span x-text="item.length > 16 ? item.slice(0, 12) + '...' + item.slice(-4) : item"></span>
+                            <button @click="form.write_blocked_pubkeys.splice(index, 1)" class="text-gray-400 hover:text-white">&times;</button>
+                        </span>
+                    </template>
+                </div>
+                <input type="text" placeholder="Enter pubkey and press Enter" @keydown.enter.prevent="addTag($event, form.write_blocked_pubkeys)"
+                    class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+            </div>
+        </div>
+
+        <!-- Read Policy -->
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 mb-4">
+            <h3 class="text-sm font-medium text-gray-400 mb-4">Read Policy</h3>
+
+            <div class="flex items-center justify-between mb-4">
+                <span class="text-sm">Require Auth</span>
+                <button @click="form.read_require_auth = !form.read_require_auth" class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors" :class="form.read_require_auth ? 'bg-white' : 'bg-gray-700'">
+                    <span class="inline-block h-4 w-4 rounded-full transition-transform" :class="form.read_require_auth ? 'translate-x-6 bg-gray-900' : 'translate-x-1 bg-gray-400'"></span>
+                </button>
+            </div>
+
+            <div x-data="tagInput()">
+                <label class="block text-sm text-gray-400 mb-1">Allowed Pubkeys</label>
+                <div class="flex flex-wrap gap-1.5 mb-2">
+                    <template x-for="(item, index) in form.read_allowed_pubkeys" :key="index">
+                        <span class="bg-gray-700 text-gray-200 rounded px-2 py-1 text-xs inline-flex items-center gap-1">
+                            <span x-text="item.length > 16 ? item.slice(0, 12) + '...' + item.slice(-4) : item"></span>
+                            <button @click="form.read_allowed_pubkeys.splice(index, 1)" class="text-gray-400 hover:text-white">&times;</button>
+                        </span>
+                    </template>
+                </div>
+                <input type="text" placeholder="Enter pubkey and press Enter" @keydown.enter.prevent="addTag($event, form.read_allowed_pubkeys)"
+                    class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+            </div>
+        </div>
+
+        <!-- Event Policy -->
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 mb-4">
+            <h3 class="text-sm font-medium text-gray-400 mb-4">Event Policy</h3>
+
+            <div class="mb-4" x-data="tagInput()">
+                <label class="block text-sm text-gray-400 mb-1">Allowed Kinds</label>
+                <div class="flex flex-wrap gap-1.5 mb-2">
+                    <template x-for="(item, index) in form.allowed_kinds" :key="index">
+                        <span class="bg-gray-700 text-gray-200 rounded px-2 py-1 text-xs inline-flex items-center gap-1">
+                            <span x-text="item"></span>
+                            <button @click="form.allowed_kinds.splice(index, 1)" class="text-gray-400 hover:text-white">&times;</button>
+                        </span>
+                    </template>
+                </div>
+                <input type="number" placeholder="Enter kind number and press Enter" @keydown.enter.prevent="addNumTag($event, form.allowed_kinds)"
+                    class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+            </div>
+
+            <div class="mb-4" x-data="tagInput()">
+                <label class="block text-sm text-gray-400 mb-1">Blocked Kinds</label>
+                <div class="flex flex-wrap gap-1.5 mb-2">
+                    <template x-for="(item, index) in form.blocked_kinds" :key="index">
+                        <span class="bg-gray-700 text-gray-200 rounded px-2 py-1 text-xs inline-flex items-center gap-1">
+                            <span x-text="item"></span>
+                            <button @click="form.blocked_kinds.splice(index, 1)" class="text-gray-400 hover:text-white">&times;</button>
+                        </span>
+                    </template>
+                </div>
+                <input type="number" placeholder="Enter kind number and press Enter" @keydown.enter.prevent="addNumTag($event, form.blocked_kinds)"
+                    class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+            </div>
+
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Min PoW</label>
+                    <input type="number" x-model.number="form.min_pow" placeholder="None"
+                        class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Max Content Length</label>
+                    <input type="number" x-model.number="form.max_content_length" placeholder="None"
+                        class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+                </div>
+            </div>
+        </div>
+
+        <!-- Rate Limits -->
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 mb-6">
+            <h3 class="text-sm font-medium text-gray-400 mb-4">Rate Limits</h3>
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Writes/min</label>
+                    <input type="number" x-model.number="form.writes_per_minute" placeholder="None"
+                        class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Reads/min</label>
+                    <input type="number" x-model.number="form.reads_per_minute" placeholder="None"
+                        class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+                </div>
+            </div>
+        </div>
+
+        <!-- Error message -->
+        <div x-show="formError" class="bg-red-900/50 border border-red-700 text-red-200 px-4 py-3 rounded-lg mb-4 text-sm" x-text="formError"></div>
+
+        <!-- Actions -->
+        <div class="flex items-center gap-3">
+            <button @click="saveRelay()" class="bg-white text-gray-900 px-5 py-2 rounded-lg text-sm font-medium hover:bg-gray-100 transition">Save</button>
+            <button @click="currentView = 'list'" class="text-sm text-gray-400 hover:text-white px-4 py-2 transition">Cancel</button>
+            <template x-if="editingRelay">
+                <button @click="confirmDelete(editingRelay)" class="ml-auto text-sm text-red-400 hover:text-red-300 px-4 py-2 transition">Delete</button>
+            </template>
+        </div>
+    </main>
+
+    <!-- Delete Confirmation Modal -->
+    <div x-show="deleteTarget" class="fixed inset-0 z-50 flex items-center justify-center" x-cloak>
+        <div class="absolute inset-0 bg-black/50" @click="deleteTarget = null"></div>
+        <div class="relative bg-gray-900 border border-gray-800 rounded-lg p-6 max-w-sm w-full mx-4">
+            <h3 class="text-lg font-semibold mb-2">Delete Relay</h3>
+            <p class="text-sm text-gray-400 mb-6">Are you sure you want to delete <span class="text-white font-medium" x-text="deleteTarget?.name"></span>? This cannot be undone.</p>
+            <div class="flex gap-3 justify-end">
+                <button @click="deleteTarget = null" class="text-sm text-gray-400 hover:text-white px-4 py-2 transition">Cancel</button>
+                <button @click="deleteRelay()" class="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 transition">Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function tagInput() {
+            return {
+                addTag(event, arr) {
+                    const val = event.target.value.trim();
+                    if (val && !arr.includes(val)) {
+                        arr.push(val);
+                    }
+                    event.target.value = '';
+                },
+                addNumTag(event, arr) {
+                    const val = parseInt(event.target.value);
+                    if (!isNaN(val) && !arr.includes(val)) {
+                        arr.push(val);
+                    }
+                    event.target.value = '';
+                }
+            };
+        }
+
+        function adminApp() {
+            return {
+                relays: [],
+                currentView: 'list',
+                editingRelay: null,
+                deleteTarget: null,
+                pendingRestart: false,
+                formError: '',
+                statusInfo: { domain: 'localhost', port: 8080 },
+                form: {
+                    id: '',
+                    name: '',
+                    description: '',
+                    subdomain: '',
+                    db_path: '',
+                    db_path_manual: false,
+                    write_require_auth: false,
+                    write_allowed_pubkeys: [],
+                    write_blocked_pubkeys: [],
+                    read_require_auth: false,
+                    read_allowed_pubkeys: [],
+                    allowed_kinds: [],
+                    blocked_kinds: [],
+                    min_pow: '',
+                    max_content_length: '',
+                    writes_per_minute: '',
+                    reads_per_minute: '',
+                },
+
+                emptyForm() {
+                    return {
+                        id: '',
+                        name: '',
+                        description: '',
+                        subdomain: '',
+                        db_path: '',
+                        db_path_manual: false,
+                        write_require_auth: false,
+                        write_allowed_pubkeys: [],
+                        write_blocked_pubkeys: [],
+                        read_require_auth: false,
+                        read_allowed_pubkeys: [],
+                        allowed_kinds: [],
+                        blocked_kinds: [],
+                        min_pow: '',
+                        max_content_length: '',
+                        writes_per_minute: '',
+                        reads_per_minute: '',
+                    };
+                },
+
+                async init() {
+                    await this.fetchStatus();
+                    await this.fetchRelays();
+                },
+
+                async fetchStatus() {
+                    try {
+                        const res = await fetch('/api/status');
+                        if (res.ok) {
+                            const data = await res.json();
+                            this.pendingRestart = data.pending_restart;
+                            this.statusInfo = { domain: data.domain, port: data.port };
+                        }
+                    } catch (e) { console.error('Failed to fetch status', e); }
+                },
+
+                async fetchRelays() {
+                    try {
+                        const res = await fetch('/api/relays');
+                        if (res.ok) {
+                            this.relays = await res.json();
+                        } else if (res.status === 401) {
+                            window.location.href = '/';
+                        }
+                    } catch (e) { console.error('Failed to fetch relays', e); }
+                },
+
+                showCreateForm() {
+                    this.editingRelay = null;
+                    this.form = this.emptyForm();
+                    this.formError = '';
+                    this.currentView = 'form';
+                },
+
+                showEditForm(relay) {
+                    this.editingRelay = relay;
+                    this.formError = '';
+                    const p = relay.policy || {};
+                    const w = p.write || {};
+                    const r = p.read || {};
+                    const e = p.events || {};
+                    const rl = p.rate_limit || {};
+                    this.form = {
+                        id: relay.id,
+                        name: relay.name,
+                        description: relay.description || '',
+                        subdomain: relay.subdomain,
+                        db_path: relay.db_path,
+                        db_path_manual: true,
+                        write_require_auth: w.require_auth || false,
+                        write_allowed_pubkeys: [...(w.allowed_pubkeys || [])],
+                        write_blocked_pubkeys: [...(w.blocked_pubkeys || [])],
+                        read_require_auth: r.require_auth || false,
+                        read_allowed_pubkeys: [...(r.allowed_pubkeys || [])],
+                        allowed_kinds: [...(e.allowed_kinds || [])],
+                        blocked_kinds: [...(e.blocked_kinds || [])],
+                        min_pow: e.min_pow ?? '',
+                        max_content_length: e.max_content_length ?? '',
+                        writes_per_minute: rl.writes_per_minute ?? '',
+                        reads_per_minute: rl.reads_per_minute ?? '',
+                    };
+                    this.currentView = 'form';
+                },
+
+                collectFormData() {
+                    const data = {
+                        name: this.form.name,
+                        description: this.form.description || null,
+                        subdomain: this.form.subdomain,
+                        db_path: this.form.db_path,
+                        policy: {
+                            write: {
+                                require_auth: this.form.write_require_auth,
+                                allowed_pubkeys: this.form.write_allowed_pubkeys.length ? this.form.write_allowed_pubkeys : null,
+                                blocked_pubkeys: this.form.write_blocked_pubkeys.length ? this.form.write_blocked_pubkeys : null,
+                            },
+                            read: {
+                                require_auth: this.form.read_require_auth,
+                                allowed_pubkeys: this.form.read_allowed_pubkeys.length ? this.form.read_allowed_pubkeys : null,
+                            },
+                            events: {
+                                allowed_kinds: this.form.allowed_kinds.length ? this.form.allowed_kinds : null,
+                                blocked_kinds: this.form.blocked_kinds.length ? this.form.blocked_kinds : null,
+                                min_pow: this.form.min_pow !== '' ? Number(this.form.min_pow) : null,
+                                max_content_length: this.form.max_content_length !== '' ? Number(this.form.max_content_length) : null,
+                            },
+                            rate_limit: (this.form.writes_per_minute !== '' || this.form.reads_per_minute !== '') ? {
+                                writes_per_minute: this.form.writes_per_minute !== '' ? Number(this.form.writes_per_minute) : null,
+                                reads_per_minute: this.form.reads_per_minute !== '' ? Number(this.form.reads_per_minute) : null,
+                            } : null,
+                        }
+                    };
+                    if (!this.editingRelay) {
+                        data.id = this.form.id;
+                    }
+                    return data;
+                },
+
+                async saveRelay() {
+                    this.formError = '';
+                    const data = this.collectFormData();
+
+                    try {
+                        let res;
+                        if (this.editingRelay) {
+                            res = await fetch(`/api/relays/${this.editingRelay.id}`, {
+                                method: 'PUT',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(data),
+                            });
+                        } else {
+                            res = await fetch('/api/relays', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(data),
+                            });
+                        }
+
+                        if (res.ok) {
+                            await this.fetchRelays();
+                            await this.fetchStatus();
+                            this.currentView = 'list';
+                        } else if (res.status === 401) {
+                            window.location.href = '/';
+                        } else {
+                            this.formError = await res.text();
+                        }
+                    } catch (e) {
+                        this.formError = 'Network error: ' + e.message;
+                    }
+                },
+
+                confirmDelete(relay) {
+                    this.deleteTarget = relay;
+                },
+
+                async deleteRelay() {
+                    if (!this.deleteTarget) return;
+                    try {
+                        const res = await fetch(`/api/relays/${this.deleteTarget.id}`, { method: 'DELETE' });
+                        if (res.ok || res.status === 204) {
+                            this.deleteTarget = null;
+                            await this.fetchRelays();
+                            await this.fetchStatus();
+                            if (this.currentView === 'form') {
+                                this.currentView = 'list';
+                            }
+                        } else if (res.status === 401) {
+                            window.location.href = '/';
+                        } else {
+                            alert('Delete failed: ' + await res.text());
+                        }
+                    } catch (e) {
+                        alert('Network error: ' + e.message);
+                    }
+                },
+
+                async logout() {
+                    await fetch('/api/logout', { method: 'POST' });
+                    window.location.href = '/';
+                }
+            };
+        }
+    </script>
+</body>
+</html>
