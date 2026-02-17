@@ -3,15 +3,18 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         State,
     },
+    http::{header, HeaderMap},
     response::{Html, IntoResponse},
     routing::get,
     Router,
 };
 use futures::{sink::SinkExt, stream::StreamExt};
 use nostr::{ClientMessage, Event, JsonUtil, RelayMessage};
+use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::broadcast;
+use tower_http::cors::{Any, CorsLayer};
 
 use crate::config::RelayConfig;
 use crate::policy::{PolicyEngine, PolicyResult};
@@ -23,6 +26,8 @@ pub struct RelayState {
     pub config: RelayConfig,
     pub relay_id: String,
     pub pages_dir: PathBuf,
+    pub admin_pubkey: String,
+    pub relay_url: String,
     pub tx: broadcast::Sender<Event>,
 }
 
@@ -33,6 +38,8 @@ impl RelayState {
         policy: Arc<PolicyEngine>,
         relay_id: String,
         pages_dir: PathBuf,
+        admin_pubkey: String,
+        relay_url: String,
     ) -> Self {
         let (tx, _rx) = broadcast::channel(100);
         Self {
@@ -41,24 +48,46 @@ impl RelayState {
             config,
             relay_id,
             pages_dir,
+            admin_pubkey,
+            relay_url,
             tx,
         }
     }
 }
 
 pub fn create_relay_router(state: Arc<RelayState>) -> Router {
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods([axum::http::Method::GET, axum::http::Method::OPTIONS])
+        .allow_headers(Any);
+
     Router::new()
         .route("/", get(root_handler))
+        .layer(cors)
         .with_state(state)
 }
 
-/// Handles both WebSocket upgrades and regular HTTP GET requests.
-/// If the request is a WebSocket upgrade, hand off to the WS handler.
-/// Otherwise, serve the relay's custom home page (or a default).
+/// Handles NIP-11 info document, WebSocket upgrades, and regular HTTP GET requests.
 async fn root_handler(
     ws: Option<WebSocketUpgrade>,
+    headers: HeaderMap,
     State(state): State<Arc<RelayState>>,
 ) -> impl IntoResponse {
+    // NIP-11: Return relay info document if client requests it
+    if let Some(accept) = headers.get(header::ACCEPT) {
+        if let Ok(accept_str) = accept.to_str() {
+            if accept_str.contains("application/nostr+json") {
+                let doc = build_nip11(&state);
+                let json = serde_json::to_string(&doc).unwrap_or_default();
+                return (
+                    [(header::CONTENT_TYPE, "application/nostr+json")],
+                    json,
+                )
+                    .into_response();
+            }
+        }
+    }
+
     // WebSocket upgrade takes priority
     if let Some(ws) = ws {
         return ws.on_upgrade(|socket| handle_socket(socket, state)).into_response();
@@ -113,6 +142,98 @@ fn html_escape(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+// --- NIP-11 Relay Information Document ---
+
+#[derive(Serialize)]
+struct Nip11Document {
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    contact: Option<String>,
+    supported_nips: Vec<u32>,
+    software: String,
+    version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    icon: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    banner: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    terms_of_service: Option<String>,
+    limitation: Nip11Limitation,
+}
+
+#[derive(Serialize)]
+struct Nip11Limitation {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_message_length: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_subscriptions: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_subid_length: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_limit: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_content_length: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_event_tags: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default_limit: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    min_pow_difficulty: Option<u8>,
+    auth_required: bool,
+    restricted_writes: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    created_at_lower_limit: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    created_at_upper_limit: Option<u64>,
+}
+
+fn build_nip11(state: &RelayState) -> Nip11Document {
+    let policy = &state.config.policy;
+    let nip11 = &state.config.nip11;
+
+    let auth_required = policy.write.require_auth || policy.read.require_auth;
+    let restricted_writes = policy.write.allowed_pubkeys.is_some()
+        || policy.write.wot.is_some()
+        || policy.write.tagged_pubkeys.is_some();
+
+    let pubkey = if state.admin_pubkey.is_empty() {
+        None
+    } else {
+        Some(state.admin_pubkey.clone())
+    };
+
+    Nip11Document {
+        name: state.config.name.clone(),
+        description: state.config.description.clone(),
+        pubkey,
+        contact: nip11.contact.clone(),
+        supported_nips: vec![1, 11, 13],
+        software: "https://github.com/barrydeen/moar".to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        icon: nip11.icon.clone(),
+        banner: nip11.banner.clone(),
+        terms_of_service: nip11.terms_of_service.clone(),
+        limitation: Nip11Limitation {
+            max_message_length: nip11.max_message_length,
+            max_subscriptions: nip11.max_subscriptions,
+            max_subid_length: nip11.max_subid_length,
+            max_limit: nip11.max_limit,
+            max_content_length: policy.events.max_content_length.map(|v| v as u64),
+            max_event_tags: nip11.max_event_tags,
+            default_limit: nip11.default_limit,
+            min_pow_difficulty: policy.events.min_pow,
+            auth_required,
+            restricted_writes,
+            created_at_lower_limit: nip11.created_at_lower_limit,
+            created_at_upper_limit: nip11.created_at_upper_limit,
+        },
+    }
 }
 
 async fn handle_socket(socket: WebSocket, state: Arc<RelayState>) {
