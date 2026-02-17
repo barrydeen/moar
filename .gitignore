@@ -2,3 +2,4 @@
 moar.toml
 data/
 *.mdb
+.env

@@ -1,0 +1,67 @@
+domain = "${MOAR_DOMAIN}"
+port = 8080
+admin_pubkey = "${ADMIN_PUBKEY}"
+pages_dir = "/app/data/pages"
+discovery_relays = [
+    "wss://relay.damus.io",
+    "wss://nos.lol",
+    "wss://relay.nostr.band",
+]
+
+[relays.outbox]
+name = "Outbox"
+description = "My outbox relay"
+subdomain = "outbox"
+db_path = "/app/data/outbox.mdb"
+
+[relays.outbox.policy.write]
+allowed_pubkeys = ["${ADMIN_PUBKEY}"]
+
+[relays.outbox.policy.read]
+
+[relays.outbox.policy.events]
+
+[relays.inbox]
+name = "Inbox"
+description = "My inbox relay"
+subdomain = "inbox"
+db_path = "/app/data/inbox.mdb"
+
+[relays.inbox.policy.write]
+require_auth = false
+tagged_pubkeys = ["${ADMIN_PUBKEY}"]
+
+[relays.inbox.policy.read]
+
+[relays.inbox.policy.events]
+
+[relays.dms]
+name = "DM Relay"
+description = "Private direct messages"
+subdomain = "dm"
+db_path = "/app/data/dm.mdb"
+
+[relays.dms.policy.write]
+require_auth = true
+allowed_pubkeys = ["${ADMIN_PUBKEY}"]
+
+[relays.dms.policy.read]
+require_auth = true
+allowed_pubkeys = ["${ADMIN_PUBKEY}"]
+
+[relays.dms.policy.events]
+allowed_kinds = [4, 1059, 5]
+
+[blossoms.media]
+name = "Media"
+description = "Blossom media server"
+subdomain = "media"
+storage_path = "/app/data/blossom/media"
+
+[blossoms.media.policy]
+max_file_size = 104857600
+
+[blossoms.media.policy.upload]
+
+[blossoms.media.policy.list]
+require_auth = false

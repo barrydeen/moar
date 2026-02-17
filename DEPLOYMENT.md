@@ -1,8 +1,94 @@
 # Deployment Guide
 
-## Building
+## Docker Deployment (Recommended)
 
-### From Source
+The Docker setup includes Caddy for automatic TLS — no wildcard certs or DNS API tokens needed. Caddy uses on-demand TLS (HTTP-01 challenge) to provision individual certificates per subdomain automatically.
+
+### Prerequisites
+
+- Docker and Docker Compose
+- A domain with DNS A records pointing to your server:
+  - `relay.example.com` → your server IP
+  - `*.relay.example.com` → your server IP
+- Ports 80 and 443 open
+
+### Quick Start
+
+```bash
+git clone https://github.com/example/moar.git
+cd moar
+cp .env.example .env
+```
+
+Edit `.env` with your domain and admin pubkey:
+
+```
+MOAR_DOMAIN=relay.example.com
+ADMIN_PUBKEY=your-hex-pubkey-here
+RUST_LOG=info
+```
+
+Then start:
+
+```bash
+docker compose up -d
+```
+
+On first run, MOAR generates a starter config at `config/moar.toml` with sensible defaults (outbox, inbox, DM relays + blossom media server). After that, the config is managed through the admin UI and persists across restarts.
+
+### What Gets Created
+
+```
+moar/
+  config/moar.toml     # Generated on first run, preserved on restarts
+  data/                # LMDB databases and blossom media files
+  pages/               # Custom relay landing pages
+```
+
+### Managing
+
+```bash
+# View logs
+docker compose logs -f
+
+# Restart after config changes
+docker compose restart moar
+
+# Rebuild after code updates
+git pull
+docker compose up -d --build
+
+# Stop everything
+docker compose down
+```
+
+### How TLS Works
+
+Caddy uses "on-demand TLS" — when a new subdomain is first accessed, Caddy:
+
+1. Calls MOAR's `/.well-known/caddy-ask` endpoint to verify the hostname is valid
+2. If valid, provisions a Let's Encrypt certificate via HTTP-01 challenge
+3. Caches the cert in a named Docker volume (`caddy_data`)
+
+This means when you add a new relay via the admin UI, its TLS cert is provisioned automatically on first access. No manual cert management needed.
+
+### One-Line Installer
+
+For a guided setup experience:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/example/moar/master/install.sh | bash
+```
+
+The installer detects Docker, prompts for your domain and pubkey, and starts everything.
+
+---
+
+## Bare-Metal Deployment
+
+### Building
+
+#### From Source
 
 ```bash
 git clone https://github.com/example/moar.git
