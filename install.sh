@@ -141,7 +141,7 @@ ask() {
     prompt_text="$2"
     printf "\n  ${ARROW} ${WHITE}%b${RESET}\n" "$prompt_text"
     printf "  ${GRAY}  ❯${RESET} "
-    read -r value
+    read -r value < /dev/tty
     eval "$var_name=\"\$value\""
 }
 
@@ -182,7 +182,7 @@ if ! command -v docker >/dev/null 2>&1; then
     box_bot
     blank
     printf "  ${ARROW} ${WHITE}Install Docker now? ${GRAY}[Y/n]${RESET} "
-    read -r install_docker
+    read -r install_docker < /dev/tty
     install_docker="${install_docker:-Y}"
     blank
 
@@ -298,7 +298,7 @@ while true; do
     if [ "${#cleaned}" -ne 64 ]; then
         printf "  ${YELLOW}  Expected 64 hex characters, got ${#cleaned}${RESET}\n"
         printf "  ${DIM}    Continue anyway? ${GRAY}[y/N]${RESET} "
-        read -r force_pk
+        read -r force_pk < /dev/tty
         if [ "$force_pk" = "y" ] || [ "$force_pk" = "Y" ]; then
             break
         fi
