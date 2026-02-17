@@ -7,6 +7,8 @@ pub trait NostrStore: Send + Sync {
     fn delete_event(&self, id: &[u8; 32]) -> Result<bool>;
     fn query(&self, filter: &Filter) -> Result<Vec<Event>>;
     fn iter_all(&self) -> Result<Vec<Event>>;
+    fn event_count(&self) -> Result<u64>;
+    fn db_path(&self) -> &str;
 }
 
 pub mod lmdb;
