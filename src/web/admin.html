@@ -15,6 +15,9 @@
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
     <style>
         [x-cloak] { display: none !important; }
+        .preset-card { transition: all 0.2s ease; }
+        .preset-card:hover { transform: translateY(-2px); }
+        .preset-card.selected { ring: 2px; }
     </style>
 </head>
 <body class="bg-gray-950 text-white min-h-screen" x-cloak x-data="adminApp()" x-init="init()">
@@ -30,11 +33,11 @@
         Configuration saved. Restart MOAR to apply changes.
     </div>
 
-    <!-- Relay List View -->
+    <!-- ==================== RELAY LIST VIEW ==================== -->
     <main x-show="currentView === 'list'" class="max-w-4xl mx-auto px-6 py-8">
         <div class="flex items-center justify-between mb-6">
             <h2 class="text-lg font-semibold">Relays</h2>
-            <button @click="showCreateForm()" class="bg-white text-gray-900 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-100 transition">
+            <button @click="currentView = 'presets'" class="bg-white text-gray-900 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-100 transition">
                 Create New Relay
             </button>
         </div>
@@ -61,6 +64,9 @@
                         <template x-if="relay.policy?.write?.allowed_pubkeys?.length">
                             <span class="bg-gray-800 text-gray-300 rounded-full px-2 py-1 text-xs" x-text="relay.policy.write.allowed_pubkeys.length + ' write keys'"></span>
                         </template>
+                        <template x-if="relay.policy?.write?.tagged_pubkeys?.length">
+                            <span class="bg-gray-800 text-gray-300 rounded-full px-2 py-1 text-xs" x-text="relay.policy.write.tagged_pubkeys.length + ' tagged keys'"></span>
+                        </template>
                         <template x-if="relay.policy?.events?.allowed_kinds?.length">
                             <span class="bg-gray-800 text-gray-300 rounded-full px-2 py-1 text-xs" x-text="'Kinds: ' + relay.policy.events.allowed_kinds.join(', ')"></span>
                         </template>
@@ -81,13 +87,198 @@
         </div>
     </main>
 
-    <!-- Create/Edit Form View -->
-    <main x-show="currentView === 'form'" class="max-w-2xl mx-auto px-6 py-8">
+    <!-- ==================== PRESET SELECTOR VIEW ==================== -->
+    <main x-show="currentView === 'presets'" class="max-w-4xl mx-auto px-6 py-8">
         <button @click="currentView = 'list'" class="text-sm text-gray-400 hover:text-white mb-6 inline-flex items-center gap-1 transition">
             &larr; Back to relays
         </button>
 
-        <h2 class="text-lg font-semibold mb-6" x-text="editingRelay ? 'Edit Relay' : 'Create Relay'"></h2>
+        <div class="text-center mb-8">
+            <h2 class="text-2xl font-bold mb-2">Create a Relay</h2>
+            <p class="text-gray-400 text-sm">Choose a preset to get started quickly, or build from scratch.</p>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+            <!-- Public Relay -->
+            <button @click="selectPreset('public')" class="preset-card bg-gray-900 border border-gray-800 hover:border-emerald-500/50 rounded-xl p-6 text-left group">
+                <div class="w-12 h-12 rounded-xl bg-emerald-500/10 flex items-center justify-center mb-4 group-hover:bg-emerald-500/20 transition">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" class="text-emerald-400">
+                        <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/>
+                        <ellipse cx="12" cy="12" rx="4" ry="10" stroke="currentColor" stroke-width="1.5"/>
+                        <path d="M2.5 9h19M2.5 15h19" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    </svg>
+                </div>
+                <h3 class="font-semibold text-white mb-1">Public Relay</h3>
+                <p class="text-xs text-gray-400 leading-relaxed">Open to everyone. Anyone can read and write events. Great for public discourse.</p>
+                <div class="flex gap-1.5 mt-3">
+                    <span class="bg-emerald-500/10 text-emerald-400 rounded-full px-2 py-0.5 text-[10px] font-medium">Open Read</span>
+                    <span class="bg-emerald-500/10 text-emerald-400 rounded-full px-2 py-0.5 text-[10px] font-medium">Open Write</span>
+                </div>
+            </button>
+
+            <!-- Private Relay -->
+            <button @click="selectPreset('private')" class="preset-card bg-gray-900 border border-gray-800 hover:border-violet-500/50 rounded-xl p-6 text-left group">
+                <div class="w-12 h-12 rounded-xl bg-violet-500/10 flex items-center justify-center mb-4 group-hover:bg-violet-500/20 transition">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" class="text-violet-400">
+                        <rect x="3" y="11" width="18" height="10" rx="2" stroke="currentColor" stroke-width="1.5"/>
+                        <path d="M7 11V7a5 5 0 0 1 10 0v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                        <circle cx="12" cy="16" r="1.5" fill="currentColor"/>
+                    </svg>
+                </div>
+                <h3 class="font-semibold text-white mb-1">Private Relay</h3>
+                <p class="text-xs text-gray-400 leading-relaxed">Locked down. Only approved pubkeys can read or write. For private communities.</p>
+                <div class="flex gap-1.5 mt-3">
+                    <span class="bg-violet-500/10 text-violet-400 rounded-full px-2 py-0.5 text-[10px] font-medium">Auth Read</span>
+                    <span class="bg-violet-500/10 text-violet-400 rounded-full px-2 py-0.5 text-[10px] font-medium">Auth Write</span>
+                </div>
+            </button>
+
+            <!-- Outbox Relay -->
+            <button @click="selectPreset('outbox')" class="preset-card bg-gray-900 border border-gray-800 hover:border-sky-500/50 rounded-xl p-6 text-left group">
+                <div class="w-12 h-12 rounded-xl bg-sky-500/10 flex items-center justify-center mb-4 group-hover:bg-sky-500/20 transition">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" class="text-sky-400">
+                        <path d="M12 3v12m0 0l-4-4m4 4l4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" transform="rotate(180 12 12)"/>
+                        <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    </svg>
+                </div>
+                <h3 class="font-semibold text-white mb-1">Outbox Relay</h3>
+                <p class="text-xs text-gray-400 leading-relaxed">Your broadcast channel. Only you can write, but anyone can read your notes.</p>
+                <div class="flex gap-1.5 mt-3">
+                    <span class="bg-sky-500/10 text-sky-400 rounded-full px-2 py-0.5 text-[10px] font-medium">Open Read</span>
+                    <span class="bg-sky-500/10 text-sky-400 rounded-full px-2 py-0.5 text-[10px] font-medium">Restricted Write</span>
+                </div>
+            </button>
+
+            <!-- Inbox Relay -->
+            <button @click="selectPreset('inbox')" class="preset-card bg-gray-900 border border-gray-800 hover:border-amber-500/50 rounded-xl p-6 text-left group">
+                <div class="w-12 h-12 rounded-xl bg-amber-500/10 flex items-center justify-center mb-4 group-hover:bg-amber-500/20 transition">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" class="text-amber-400">
+                        <path d="M4 4h16v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4z" stroke="currentColor" stroke-width="1.5"/>
+                        <path d="M4 4l8 7 8-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                        <circle cx="18" cy="18" r="4" fill="currentColor" opacity="0.2"/>
+                        <path d="M18 16v4m-2-2h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    </svg>
+                </div>
+                <h3 class="font-semibold text-white mb-1">Inbox Relay</h3>
+                <p class="text-xs text-gray-400 leading-relaxed">Receive mentions. Anyone can write if they tag your pubkey. Open read access.</p>
+                <div class="flex gap-1.5 mt-3">
+                    <span class="bg-amber-500/10 text-amber-400 rounded-full px-2 py-0.5 text-[10px] font-medium">Open Read</span>
+                    <span class="bg-amber-500/10 text-amber-400 rounded-full px-2 py-0.5 text-[10px] font-medium">Tagged Write</span>
+                </div>
+            </button>
+
+            <!-- DM Relay -->
+            <button @click="selectPreset('dm')" class="preset-card bg-gray-900 border border-gray-800 hover:border-rose-500/50 rounded-xl p-6 text-left group">
+                <div class="w-12 h-12 rounded-xl bg-rose-500/10 flex items-center justify-center mb-4 group-hover:bg-rose-500/20 transition">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" class="text-rose-400">
+                        <path d="M21 12c0 4.418-4.03 8-9 8a9.86 9.86 0 0 1-4.255-.964L3 20l1.338-3.123C3.49 15.509 3 13.812 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" stroke="currentColor" stroke-width="1.5"/>
+                        <path d="M9 12h.01M12 12h.01M15 12h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                        <circle cx="18" cy="5" r="3" fill="currentColor" opacity="0.3"/>
+                        <path d="M17 5h2M18 4v2" stroke="currentColor" stroke-width="1" stroke-linecap="round"/>
+                    </svg>
+                </div>
+                <h3 class="font-semibold text-white mb-1">DM Relay</h3>
+                <p class="text-xs text-gray-400 leading-relaxed">Private messages. Anyone can write if tagging you. Only approved keys can read with AUTH.</p>
+                <div class="flex gap-1.5 mt-3">
+                    <span class="bg-rose-500/10 text-rose-400 rounded-full px-2 py-0.5 text-[10px] font-medium">Auth Read</span>
+                    <span class="bg-rose-500/10 text-rose-400 rounded-full px-2 py-0.5 text-[10px] font-medium">Tagged Write</span>
+                </div>
+            </button>
+
+            <!-- Advanced / Custom -->
+            <button @click="showCreateForm()" class="preset-card bg-gray-900 border border-gray-800 border-dashed hover:border-gray-600 rounded-xl p-6 text-left group">
+                <div class="w-12 h-12 rounded-xl bg-gray-800 flex items-center justify-center mb-4 group-hover:bg-gray-700 transition">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" class="text-gray-400">
+                        <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    </svg>
+                </div>
+                <h3 class="font-semibold text-white mb-1">Advanced Setup</h3>
+                <p class="text-xs text-gray-400 leading-relaxed">Full control. Configure every policy option manually from scratch.</p>
+                <div class="flex gap-1.5 mt-3">
+                    <span class="bg-gray-800 text-gray-400 rounded-full px-2 py-0.5 text-[10px] font-medium">Custom</span>
+                </div>
+            </button>
+        </div>
+    </main>
+
+    <!-- ==================== SIMPLE PRESET FORM VIEW ==================== -->
+    <main x-show="currentView === 'simpleForm'" class="max-w-2xl mx-auto px-6 py-8">
+        <button @click="currentView = 'presets'" class="text-sm text-gray-400 hover:text-white mb-6 inline-flex items-center gap-1 transition">
+            &larr; Back to presets
+        </button>
+
+        <div class="mb-6">
+            <h2 class="text-lg font-semibold" x-text="'Create ' + presetLabel(selectedPreset) + ' Relay'"></h2>
+            <p class="text-sm text-gray-400 mt-1" x-text="presetDescription(selectedPreset)"></p>
+        </div>
+
+        <!-- Basic fields -->
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 mb-4">
+            <div class="mb-4">
+                <label class="block text-sm text-gray-400 mb-1">Relay ID</label>
+                <input type="text" x-model="form.id" placeholder="e.g. public, my-outbox"
+                    class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+                <p class="text-xs text-gray-500 mt-1">Alphanumeric, hyphens, underscores. Used in the config file.</p>
+            </div>
+
+            <div class="mb-4">
+                <label class="block text-sm text-gray-400 mb-1">Name</label>
+                <input type="text" x-model="form.name"
+                    class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+            </div>
+
+            <div class="mb-4">
+                <label class="block text-sm text-gray-400 mb-1">Description</label>
+                <textarea x-model="form.description" rows="2"
+                    class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600"></textarea>
+            </div>
+
+            <div>
+                <label class="block text-sm text-gray-400 mb-1">Subdomain</label>
+                <input type="text" x-model="form.subdomain" placeholder="e.g. outbox"
+                    class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+                <p class="text-xs text-gray-500 mt-1" x-show="form.subdomain" x-text="'wss://' + form.subdomain + '.' + statusInfo.domain + ':' + statusInfo.port"></p>
+            </div>
+        </div>
+
+        <!-- Auto-fill db_path from subdomain -->
+        <template x-effect="if (!editingRelay && form.subdomain && !form.db_path_manual) form.db_path = 'data/' + form.subdomain + '.mdb'"></template>
+
+        <!-- Pubkeys section (shown for presets that need them) -->
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 mb-4" x-show="presetNeedsPubkeys(selectedPreset)">
+            <h3 class="text-sm font-medium text-gray-400 mb-1" x-text="presetPubkeyLabel(selectedPreset)"></h3>
+            <p class="text-xs text-gray-500 mb-3" x-text="presetPubkeyHint(selectedPreset)"></p>
+            <div class="flex flex-wrap gap-1.5 mb-2">
+                <template x-for="(item, index) in simpleFormPubkeys" :key="index">
+                    <span class="bg-gray-700 text-gray-200 rounded px-2 py-1 text-xs inline-flex items-center gap-1">
+                        <span x-text="item.length > 20 ? item.slice(0, 12) + '...' + item.slice(-4) : item"></span>
+                        <button @click="simpleFormPubkeys.splice(index, 1)" class="text-gray-400 hover:text-white">&times;</button>
+                    </span>
+                </template>
+            </div>
+            <input type="text" placeholder="Enter npub or hex pubkey and press Enter"
+                @keydown.enter.prevent="addSimplePubkey($event)"
+                class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+        </div>
+
+        <!-- Error -->
+        <div x-show="formError" class="bg-red-900/50 border border-red-700 text-red-200 px-4 py-3 rounded-lg mb-4 text-sm" x-text="formError"></div>
+
+        <!-- Actions -->
+        <div class="flex items-center gap-3">
+            <button @click="savePresetRelay()" class="bg-white text-gray-900 px-5 py-2 rounded-lg text-sm font-medium hover:bg-gray-100 transition">Create Relay</button>
+            <button @click="currentView = 'presets'" class="text-sm text-gray-400 hover:text-white px-4 py-2 transition">Cancel</button>
+            <button @click="convertToAdvanced()" class="ml-auto text-sm text-gray-400 hover:text-white border border-gray-700 rounded px-3 py-1.5 transition">Advanced Setup →</button>
+        </div>
+    </main>
+
+    <!-- ==================== ADVANCED FORM VIEW ==================== -->
+    <main x-show="currentView === 'form'" class="max-w-2xl mx-auto px-6 py-8">
+        <button @click="editingRelay ? (currentView = 'list') : (currentView = 'presets')" class="text-sm text-gray-400 hover:text-white mb-6 inline-flex items-center gap-1 transition">
+            &larr; Back
+        </button>
+
+        <h2 class="text-lg font-semibold mb-6" x-text="editingRelay ? 'Edit Relay' : 'Advanced Setup'"></h2>
 
         <!-- Basic Info -->
         <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 mb-4">
@@ -156,7 +347,7 @@
                     class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
             </div>
 
-            <div x-data="tagInput()">
+            <div class="mb-4" x-data="tagInput()">
                 <label class="block text-sm text-gray-400 mb-1">Blocked Pubkeys</label>
                 <div class="flex flex-wrap gap-1.5 mb-2">
                     <template x-for="(item, index) in form.write_blocked_pubkeys" :key="index">
@@ -167,6 +358,21 @@
                     </template>
                 </div>
                 <input type="text" placeholder="Enter pubkey and press Enter" @keydown.enter.prevent="addTag($event, form.write_blocked_pubkeys)"
+                    class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+            </div>
+
+            <div x-data="tagInput()">
+                <label class="block text-sm text-gray-400 mb-1">Tagged Pubkeys</label>
+                <p class="text-xs text-gray-500 mb-2">If set, events must contain a <code class="bg-gray-800 px-1 rounded">p</code> tag referencing one of these pubkeys to be accepted.</p>
+                <div class="flex flex-wrap gap-1.5 mb-2">
+                    <template x-for="(item, index) in form.write_tagged_pubkeys" :key="index">
+                        <span class="bg-gray-700 text-gray-200 rounded px-2 py-1 text-xs inline-flex items-center gap-1">
+                            <span x-text="item.length > 16 ? item.slice(0, 12) + '...' + item.slice(-4) : item"></span>
+                            <button @click="form.write_tagged_pubkeys.splice(index, 1)" class="text-gray-400 hover:text-white">&times;</button>
+                        </span>
+                    </template>
+                </div>
+                <input type="text" placeholder="Enter pubkey and press Enter" @keydown.enter.prevent="addTag($event, form.write_tagged_pubkeys)"
                     class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
             </div>
         </div>
@@ -280,14 +486,14 @@
         <!-- Actions -->
         <div class="flex items-center gap-3">
             <button @click="saveRelay()" class="bg-white text-gray-900 px-5 py-2 rounded-lg text-sm font-medium hover:bg-gray-100 transition">Save</button>
-            <button @click="currentView = 'list'" class="text-sm text-gray-400 hover:text-white px-4 py-2 transition">Cancel</button>
+            <button @click="editingRelay ? (currentView = 'list') : (currentView = 'presets')" class="text-sm text-gray-400 hover:text-white px-4 py-2 transition">Cancel</button>
             <template x-if="editingRelay">
                 <button @click="confirmDelete(editingRelay)" class="ml-auto text-sm text-red-400 hover:text-red-300 px-4 py-2 transition">Delete</button>
             </template>
         </div>
     </main>
 
-    <!-- Delete Confirmation Modal -->
+    <!-- ==================== DELETE MODAL ==================== -->
     <div x-show="deleteTarget" class="fixed inset-0 z-50 flex items-center justify-center" x-cloak>
         <div class="absolute inset-0 bg-black/50" @click="deleteTarget = null"></div>
         <div class="relative bg-gray-900 border border-gray-800 rounded-lg p-6 max-w-sm w-full mx-4">
@@ -328,29 +534,12 @@
                 deleteTarget: null,
                 pendingRestart: false,
                 formError: '',
+                selectedPreset: null,
+                simpleFormPubkeys: [],
                 statusInfo: { domain: 'localhost', port: 8080 },
-                form: {
-                    id: '',
-                    name: '',
-                    description: '',
-                    subdomain: '',
-                    db_path: '',
-                    db_path_manual: false,
-                    write_require_auth: false,
-                    write_allowed_pubkeys: [],
-                    write_blocked_pubkeys: [],
-                    read_require_auth: false,
-                    read_allowed_pubkeys: [],
-                    allowed_kinds: [],
-                    blocked_kinds: [],
-                    min_pow: '',
-                    max_content_length: '',
-                    writes_per_minute: '',
-                    reads_per_minute: '',
-                    page_html: '',
-                },
+                form: this.emptyFormData(),
 
-                emptyForm() {
+                emptyFormData() {
                     return {
                         id: '',
                         name: '',
@@ -361,6 +550,7 @@
                         write_require_auth: false,
                         write_allowed_pubkeys: [],
                         write_blocked_pubkeys: [],
+                        write_tagged_pubkeys: [],
                         read_require_auth: false,
                         read_allowed_pubkeys: [],
                         allowed_kinds: [],
@@ -372,6 +562,124 @@
                         page_html: '',
                     };
                 },
+
+                emptyForm() {
+                    return this.emptyFormData();
+                },
+
+                // ---- Preset helpers ----
+
+                presetLabel(p) {
+                    return { public: 'Public', private: 'Private', outbox: 'Outbox', inbox: 'Inbox', dm: 'DM' }[p] || '';
+                },
+
+                presetDescription(p) {
+                    const descs = {
+                        public: 'An open relay where anyone can read and write. No authentication required.',
+                        private: 'A members-only relay. Add the pubkeys that should have access.',
+                        outbox: 'Your personal broadcast. Only your pubkeys can write, but anyone can read.',
+                        inbox: 'Receive mentions and replies. Anyone can write events that tag your pubkeys.',
+                        dm: 'Private messaging. Anyone can send DMs tagging your pubkeys, but only approved keys can read.',
+                    };
+                    return descs[p] || '';
+                },
+
+                presetNeedsPubkeys(p) {
+                    return ['private', 'outbox', 'inbox', 'dm'].includes(p);
+                },
+
+                presetPubkeyLabel(p) {
+                    const labels = {
+                        private: 'Approved Pubkeys',
+                        outbox: 'Writer Pubkeys',
+                        inbox: 'Your Pubkeys (to be tagged)',
+                        dm: 'Your Pubkeys (to be tagged & read)',
+                    };
+                    return labels[p] || 'Pubkeys';
+                },
+
+                presetPubkeyHint(p) {
+                    const hints = {
+                        private: 'These pubkeys will be able to read and write to this relay.',
+                        outbox: 'Only these pubkeys will be allowed to publish events.',
+                        inbox: 'Events must tag one of these pubkeys to be accepted. Anyone can read.',
+                        dm: 'Events must tag one of these pubkeys to be accepted. Only these pubkeys can read (with AUTH).',
+                    };
+                    return hints[p] || '';
+                },
+
+                selectPreset(preset) {
+                    this.selectedPreset = preset;
+                    this.simpleFormPubkeys = [];
+                    this.formError = '';
+
+                    const defaults = {
+                        public:  { name: 'Public Relay', description: 'A fully open relay', subdomain: 'pub' },
+                        private: { name: 'Private Relay', description: 'Members only', subdomain: 'private' },
+                        outbox:  { name: 'My Outbox', description: 'Only I can post here', subdomain: 'outbox' },
+                        inbox:   { name: 'Inbox', description: 'Receive mentions and replies', subdomain: 'inbox' },
+                        dm:      { name: 'DM Relay', description: 'Private direct messages', subdomain: 'dm' },
+                    };
+
+                    const d = defaults[preset];
+                    this.form = this.emptyForm();
+                    this.form.id = preset;
+                    this.form.name = d.name;
+                    this.form.description = d.description;
+                    this.form.subdomain = d.subdomain;
+                    this.form.db_path = 'data/' + d.subdomain + '.mdb';
+
+                    this.currentView = 'simpleForm';
+                },
+
+                addSimplePubkey(event) {
+                    const val = event.target.value.trim();
+                    if (val && !this.simpleFormPubkeys.includes(val)) {
+                        this.simpleFormPubkeys.push(val);
+                    }
+                    event.target.value = '';
+                },
+
+                applyPresetPolicy() {
+                    const keys = [...this.simpleFormPubkeys];
+                    const p = this.selectedPreset;
+
+                    if (p === 'public') {
+                        // No restrictions
+                    } else if (p === 'private') {
+                        this.form.write_require_auth = true;
+                        this.form.write_allowed_pubkeys = [...keys];
+                        this.form.read_require_auth = true;
+                        this.form.read_allowed_pubkeys = [...keys];
+                    } else if (p === 'outbox') {
+                        this.form.write_allowed_pubkeys = [...keys];
+                    } else if (p === 'inbox') {
+                        this.form.write_tagged_pubkeys = [...keys];
+                    } else if (p === 'dm') {
+                        this.form.write_tagged_pubkeys = [...keys];
+                        this.form.read_require_auth = true;
+                        this.form.read_allowed_pubkeys = [...keys];
+                        this.form.allowed_kinds = [4, 1059, 5];
+                    }
+                },
+
+                async savePresetRelay() {
+                    this.formError = '';
+                    if (this.presetNeedsPubkeys(this.selectedPreset) && this.simpleFormPubkeys.length === 0) {
+                        this.formError = 'Add at least one pubkey.';
+                        return;
+                    }
+                    this.applyPresetPolicy();
+                    await this.saveRelay();
+                },
+
+                convertToAdvanced() {
+                    this.applyPresetPolicy();
+                    this.editingRelay = null;
+                    this.currentView = 'form';
+                },
+
+                // ---- Core CRUD ----
 
                 async init() {
                     await this.fetchStatus();
@@ -425,6 +733,7 @@
                         write_require_auth: w.require_auth || false,
                         write_allowed_pubkeys: [...(w.allowed_pubkeys || [])],
                         write_blocked_pubkeys: [...(w.blocked_pubkeys || [])],
+                        write_tagged_pubkeys: [...(w.tagged_pubkeys || [])],
                         read_require_auth: r.require_auth || false,
                         read_allowed_pubkeys: [...(r.allowed_pubkeys || [])],
                         allowed_kinds: [...(e.allowed_kinds || [])],
@@ -435,7 +744,6 @@
                         reads_per_minute: rl.reads_per_minute ?? '',
                         page_html: '',
                     };
-                    // Fetch custom page
                     try {
                         const res = await fetch(`/api/relays/${relay.id}/page`);
                         if (res.ok) {
@@ -457,6 +765,7 @@
                                 require_auth: this.form.write_require_auth,
                                 allowed_pubkeys: this.form.write_allowed_pubkeys.length ? this.form.write_allowed_pubkeys : null,
                                 blocked_pubkeys: this.form.write_blocked_pubkeys.length ? this.form.write_blocked_pubkeys : null,
+                                tagged_pubkeys: this.form.write_tagged_pubkeys.length ? this.form.write_tagged_pubkeys : null,
                             },
                             read: {
                                 require_auth: this.form.read_require_auth,
@@ -501,7 +810,6 @@
                         }
 
                         if (res.ok) {
-                            // Save or delete custom page
                             const relayId = this.editingRelay ? this.editingRelay.id : this.form.id;
                             if (this.form.page_html) {
                                 await fetch(`/api/relays/${relayId}/page`, {
@@ -510,7 +818,6 @@
                                     body: JSON.stringify({ html: this.form.page_html }),
                                 });
                             } else if (this.editingRelay) {
-                                // Page was cleared — delete the file
                                 await fetch(`/api/relays/${relayId}/page`, { method: 'DELETE' });
                             }
                             await this.fetchRelays();

@@ -52,6 +52,9 @@ pub struct WritePolicy {
     pub allowed_pubkeys: Option<Vec<String>>,
     /// If set, these pubkeys are explicitly blocked from writing.
     pub blocked_pubkeys: Option<Vec<String>>,
+    /// If set, events are only accepted if they contain a `p` tag referencing
+    /// one of these pubkeys.  Useful for inbox/DM relays.
+    pub tagged_pubkeys: Option<Vec<String>>,
 }
 
 impl Default for WritePolicy {
@@ -60,6 +63,7 @@ impl Default for WritePolicy {
             require_auth: false,
             allowed_pubkeys: None,
             blocked_pubkeys: None,
+            tagged_pubkeys: None,
         }
     }
 }

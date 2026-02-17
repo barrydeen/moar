@@ -30,6 +30,7 @@ pub struct PolicyEngine {
     config: PolicyConfig,
     write_allowed: Option<HashSet<PublicKey>>,
     write_blocked: Option<HashSet<PublicKey>>,
+    write_tagged: Option<HashSet<PublicKey>>,
     read_allowed: Option<HashSet<PublicKey>>,
     allowed_kinds: Option<HashSet<Kind>>,
     blocked_kinds: Option<HashSet<Kind>>,
@@ -46,6 +47,12 @@ impl PolicyEngine {
         let write_blocked = config
             .write
             .blocked_pubkeys
+            .as_ref()
+            .map(|keys| parse_pubkeys(keys));
+
+        let write_tagged = config
+            .write
+            .tagged_pubkeys
             .as_ref()
             .map(|keys| parse_pubkeys(keys));
 
@@ -71,6 +78,7 @@ impl PolicyEngine {
             config,
             write_allowed,
             write_blocked,
+            write_tagged,
             read_allowed,
             allowed_kinds,
             blocked_kinds,
@@ -100,6 +108,24 @@ impl PolicyEngine {
         if let Some(ref blocked) = self.write_blocked {
             if blocked.contains(&event.pubkey) {
                 return PolicyResult::Deny("pubkey is blocked".into());
+            }
+        }
+
+        // Tagged pubkeys — event must contain a `p` tag referencing one of these
+        if let Some(ref tagged) = self.write_tagged {
+            let has_matching_tag = event.tags.iter().any(|tag| {
+                let tag_vec = tag.as_vec();
+                if tag_vec.len() >= 2 && tag_vec[0] == "p" {
+                    if let Ok(pk) = PublicKey::from_str(&tag_vec[1])
+                        .or_else(|_| PublicKey::parse(&tag_vec[1]))
+                    {
+                        return tagged.contains(&pk);
+                    }
+                }
+                false
+            });
+            if !has_matching_tag {
+                return PolicyResult::Deny("event must tag an approved pubkey".into());
             }
         }
 
