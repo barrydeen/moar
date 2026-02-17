@@ -1,3 +1,4 @@
+use moar::blossom::store::BlobStore;
 use moar::config::MoarConfig;
 use moar::gateway::start_gateway;
 use moar::policy::PolicyEngine;
@@ -60,10 +61,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 processed_relays.insert(key, (relay_conf, store, policy));
             }
 
+            let mut processed_blossoms = std::collections::HashMap::new();
+            for (key, blossom_conf) in config.blossoms.clone() {
+                let store = Arc::new(BlobStore::new(&blossom_conf.storage_path)?);
+                processed_blossoms.insert(key, (blossom_conf, store));
+            }
+
             start_gateway(
                 config.port,
                 config.domain.clone(),
                 processed_relays,
+                processed_blossoms,
                 config,
                 config_path,
                 wot_manager,

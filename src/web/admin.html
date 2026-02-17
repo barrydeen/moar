@@ -34,9 +34,10 @@
     </div>
 
     <!-- Tab Navigation -->
-    <nav x-show="currentView === 'list' || currentView === 'wotList'" class="max-w-4xl mx-auto px-6 pt-6">
+    <nav x-show="currentView === 'list' || currentView === 'wotList' || currentView === 'blossomList'" class="max-w-4xl mx-auto px-6 pt-6">
         <div class="flex gap-1 border-b border-gray-800">
             <button @click="currentView = 'list'" class="px-4 py-2 text-sm font-medium border-b-2 transition" :class="currentView === 'list' ? 'border-white text-white' : 'border-transparent text-gray-400 hover:text-white'">Relays</button>
+            <button @click="currentView = 'blossomList'; fetchBlossoms()" class="px-4 py-2 text-sm font-medium border-b-2 transition" :class="currentView === 'blossomList' ? 'border-white text-white' : 'border-transparent text-gray-400 hover:text-white'">Blossom</button>
             <button @click="currentView = 'wotList'; fetchWots()" class="px-4 py-2 text-sm font-medium border-b-2 transition" :class="currentView === 'wotList' ? 'border-white text-white' : 'border-transparent text-gray-400 hover:text-white'">Web of Trust</button>
         </div>
     </nav>
@@ -668,6 +669,248 @@
         </div>
     </main>
 
+    <!-- ==================== BLOSSOM LIST VIEW ==================== -->
+    <main x-show="currentView === 'blossomList'" class="max-w-4xl mx-auto px-6 py-8">
+        <div class="flex items-center justify-between mb-6">
+            <h2 class="text-lg font-semibold">Blossom Media Servers</h2>
+            <button @click="showBlossomCreateForm()" class="bg-white text-gray-900 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-100 transition">
+                Create Server
+            </button>
+        </div>
+
+        <div class="grid gap-4">
+            <template x-for="blossom in blossoms" :key="blossom.id">
+                <div class="bg-gray-900 border border-gray-800 rounded-lg p-5">
+                    <div class="flex items-start justify-between mb-2">
+                        <div>
+                            <h3 class="font-semibold text-white" x-text="blossom.name"></h3>
+                            <p class="text-sm text-gray-400 mt-1" x-text="blossom.description || 'No description'"></p>
+                        </div>
+                    </div>
+                    <div class="mt-3 mb-3">
+                        <span class="inline-block bg-gray-800 text-gray-300 text-xs font-mono rounded-full px-3 py-1" x-text="'https://' + blossom.subdomain + '.' + statusInfo.domain + ':' + statusInfo.port"></span>
+                    </div>
+                    <div class="flex flex-wrap gap-1.5 mb-4">
+                        <template x-if="blossom.policy?.upload?.allowed_pubkeys?.length">
+                            <span class="bg-gray-800 text-gray-300 rounded-full px-2 py-1 text-xs" x-text="blossom.policy.upload.allowed_pubkeys.length + ' upload keys'"></span>
+                        </template>
+                        <template x-if="!blossom.policy?.upload?.allowed_pubkeys">
+                            <span class="bg-emerald-500/10 text-emerald-400 rounded-full px-2 py-1 text-xs">Open Upload</span>
+                        </template>
+                        <template x-if="blossom.policy?.list?.require_auth">
+                            <span class="bg-gray-800 text-gray-300 rounded-full px-2 py-1 text-xs">List Auth</span>
+                        </template>
+                        <template x-if="blossom.policy?.max_file_size">
+                            <span class="bg-gray-800 text-gray-300 rounded-full px-2 py-1 text-xs" x-text="Math.round(blossom.policy.max_file_size / 1048576) + ' MB max'"></span>
+                        </template>
+                    </div>
+                    <div class="flex gap-3">
+                        <button @click="showBlossomMedia(blossom)" class="text-sm text-gray-400 hover:text-white border border-gray-700 rounded px-3 py-1.5 transition">Media</button>
+                        <button @click="showBlossomEditForm(blossom)" class="text-sm text-gray-400 hover:text-white border border-gray-700 rounded px-3 py-1.5 transition">Edit</button>
+                        <button @click="confirmDeleteBlossom(blossom)" class="text-sm text-red-400 hover:text-red-300 px-3 py-1.5 transition">Delete</button>
+                    </div>
+                </div>
+            </template>
+        </div>
+
+        <div x-show="blossoms.length === 0" class="text-center text-gray-500 py-12">
+            No Blossom servers configured. Create one to get started.
+        </div>
+    </main>
+
+    <!-- ==================== BLOSSOM FORM VIEW ==================== -->
+    <main x-show="currentView === 'blossomForm'" class="max-w-2xl mx-auto px-6 py-8">
+        <button @click="currentView = 'blossomList'" class="text-sm text-gray-400 hover:text-white mb-6 inline-flex items-center gap-1 transition">
+            &larr; Back to Blossom
+        </button>
+
+        <h2 class="text-lg font-semibold mb-6" x-text="editingBlossom ? 'Edit Blossom Server' : 'Create Blossom Server'"></h2>
+
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 mb-4">
+            <h3 class="text-sm font-medium text-gray-400 mb-4">Basic Info</h3>
+
+            <template x-if="!editingBlossom">
+                <div class="mb-4">
+                    <label class="block text-sm text-gray-400 mb-1">ID</label>
+                    <input type="text" x-model="blossomForm.id" placeholder="e.g. media, cdn"
+                        class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+                    <p class="text-xs text-gray-500 mt-1">Alphanumeric, hyphens, underscores only.</p>
+                </div>
+            </template>
+
+            <div class="mb-4">
+                <label class="block text-sm text-gray-400 mb-1">Name</label>
+                <input type="text" x-model="blossomForm.name" placeholder="Media Server"
+                    class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+            </div>
+
+            <div class="mb-4">
+                <label class="block text-sm text-gray-400 mb-1">Description</label>
+                <textarea x-model="blossomForm.description" rows="2" placeholder="Optional description"
+                    class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600"></textarea>
+            </div>
+
+            <div class="mb-4">
+                <label class="block text-sm text-gray-400 mb-1">Subdomain</label>
+                <input type="text" x-model="blossomForm.subdomain" placeholder="e.g. media"
+                    class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+                <p class="text-xs text-gray-500 mt-1" x-show="blossomForm.subdomain" x-text="'https://' + blossomForm.subdomain + '.' + statusInfo.domain + ':' + statusInfo.port"></p>
+            </div>
+
+            <div>
+                <label class="block text-sm text-gray-400 mb-1">Storage Path</label>
+                <input type="text" x-model="blossomForm.storage_path" placeholder="data/blossom/media"
+                    class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+            </div>
+        </div>
+
+        <!-- Auto-fill storage_path from subdomain -->
+        <template x-effect="if (!editingBlossom && blossomForm.subdomain && !blossomForm.storage_path_manual) blossomForm.storage_path = 'data/blossom/' + blossomForm.subdomain"></template>
+
+        <!-- Upload Policy -->
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 mb-4">
+            <h3 class="text-sm font-medium text-gray-400 mb-4">Upload Policy</h3>
+
+            <div x-data="tagInput()">
+                <label class="block text-sm text-gray-400 mb-1">Allowed Pubkeys</label>
+                <p class="text-xs text-gray-500 mb-2">If set, only these pubkeys can upload. Leave empty for open uploads.</p>
+                <div class="flex flex-wrap gap-1.5 mb-2">
+                    <template x-for="(item, index) in blossomForm.upload_allowed_pubkeys" :key="index">
+                        <span class="bg-gray-700 text-gray-200 rounded px-2 py-1 text-xs inline-flex items-center gap-1">
+                            <span x-text="item.length > 16 ? item.slice(0, 12) + '...' + item.slice(-4) : item"></span>
+                            <button @click="blossomForm.upload_allowed_pubkeys.splice(index, 1)" class="text-gray-400 hover:text-white">&times;</button>
+                        </span>
+                    </template>
+                </div>
+                <div class="flex gap-2">
+                    <input type="text" placeholder="Enter pubkey" @keydown.enter.prevent="addTag($event, blossomForm.upload_allowed_pubkeys)"
+                        class="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+                    <button type="button" @click="addTag({ target: $el.previousElementSibling }, blossomForm.upload_allowed_pubkeys)" class="bg-gray-800 border border-gray-700 hover:border-gray-500 text-gray-300 hover:text-white rounded-lg px-3 py-2 text-sm transition">Add</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- List Policy -->
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 mb-4">
+            <h3 class="text-sm font-medium text-gray-400 mb-4">List Policy</h3>
+
+            <div class="flex items-center justify-between mb-4">
+                <span class="text-sm">Require Auth</span>
+                <button @click="blossomForm.list_require_auth = !blossomForm.list_require_auth" class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors" :class="blossomForm.list_require_auth ? 'bg-white' : 'bg-gray-700'">
+                    <span class="inline-block h-4 w-4 rounded-full transition-transform" :class="blossomForm.list_require_auth ? 'translate-x-6 bg-gray-900' : 'translate-x-1 bg-gray-400'"></span>
+                </button>
+            </div>
+
+            <div x-data="tagInput()">
+                <label class="block text-sm text-gray-400 mb-1">Allowed Pubkeys</label>
+                <div class="flex flex-wrap gap-1.5 mb-2">
+                    <template x-for="(item, index) in blossomForm.list_allowed_pubkeys" :key="index">
+                        <span class="bg-gray-700 text-gray-200 rounded px-2 py-1 text-xs inline-flex items-center gap-1">
+                            <span x-text="item.length > 16 ? item.slice(0, 12) + '...' + item.slice(-4) : item"></span>
+                            <button @click="blossomForm.list_allowed_pubkeys.splice(index, 1)" class="text-gray-400 hover:text-white">&times;</button>
+                        </span>
+                    </template>
+                </div>
+                <div class="flex gap-2">
+                    <input type="text" placeholder="Enter pubkey" @keydown.enter.prevent="addTag($event, blossomForm.list_allowed_pubkeys)"
+                        class="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+                    <button type="button" @click="addTag({ target: $el.previousElementSibling }, blossomForm.list_allowed_pubkeys)" class="bg-gray-800 border border-gray-700 hover:border-gray-500 text-gray-300 hover:text-white rounded-lg px-3 py-2 text-sm transition">Add</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Max File Size -->
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 mb-6">
+            <h3 class="text-sm font-medium text-gray-400 mb-4">Limits</h3>
+            <div>
+                <label class="block text-sm text-gray-400 mb-1">Max File Size (MB)</label>
+                <input type="number" x-model.number="blossomForm.max_file_size_mb" placeholder="100"
+                    class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+            </div>
+        </div>
+
+        <!-- Error message -->
+        <div x-show="blossomFormError" class="bg-red-900/50 border border-red-700 text-red-200 px-4 py-3 rounded-lg mb-4 text-sm" x-text="blossomFormError"></div>
+
+        <!-- Actions -->
+        <div class="flex items-center gap-3">
+            <button @click="saveBlossom()" class="bg-white text-gray-900 px-5 py-2 rounded-lg text-sm font-medium hover:bg-gray-100 transition">Save</button>
+            <button @click="currentView = 'blossomList'" class="text-sm text-gray-400 hover:text-white px-4 py-2 transition">Cancel</button>
+            <template x-if="editingBlossom">
+                <button @click="confirmDeleteBlossom(editingBlossom)" class="ml-auto text-sm text-red-400 hover:text-red-300 px-4 py-2 transition">Delete</button>
+            </template>
+        </div>
+    </main>
+
+    <!-- ==================== BLOSSOM MEDIA VIEW ==================== -->
+    <main x-show="currentView === 'blossomMedia'" class="max-w-4xl mx-auto px-6 py-8">
+        <button @click="currentView = 'blossomList'" class="text-sm text-gray-400 hover:text-white mb-6 inline-flex items-center gap-1 transition">
+            &larr; Back to Blossom
+        </button>
+
+        <div class="flex items-center justify-between mb-6">
+            <h2 class="text-lg font-semibold" x-text="blossomMediaServer?.name + ' — Media'"></h2>
+        </div>
+
+        <!-- Upload Area -->
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 mb-6">
+            <h3 class="text-sm font-medium text-gray-400 mb-3">Upload</h3>
+            <div class="flex gap-3 items-center">
+                <input type="file" x-ref="blossomFileInput" class="text-sm text-gray-400 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-gray-800 file:text-gray-300 hover:file:bg-gray-700 file:transition file:cursor-pointer" multiple>
+                <button @click="uploadMedia()" class="bg-white text-gray-900 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-100 transition whitespace-nowrap">Upload</button>
+            </div>
+            <div x-show="uploadProgress" class="mt-3 text-sm text-gray-400" x-text="uploadProgress"></div>
+        </div>
+
+        <!-- Media Grid -->
+        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+            <template x-for="item in blossomMediaItems" :key="item.sha256">
+                <div class="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden group relative">
+                    <!-- Preview -->
+                    <div class="aspect-square bg-gray-800 flex items-center justify-center overflow-hidden">
+                        <template x-if="item.type.startsWith('image/')">
+                            <img :src="item.url" class="w-full h-full object-cover" loading="lazy">
+                        </template>
+                        <template x-if="item.type.startsWith('video/')">
+                            <video :src="item.url" class="w-full h-full object-cover" muted></video>
+                        </template>
+                        <template x-if="!item.type.startsWith('image/') && !item.type.startsWith('video/')">
+                            <div class="text-center p-3">
+                                <svg class="w-8 h-8 text-gray-500 mx-auto mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
+                                <p class="text-xs text-gray-500 truncate" x-text="item.type"></p>
+                            </div>
+                        </template>
+                    </div>
+                    <!-- Info -->
+                    <div class="p-2">
+                        <p class="text-xs text-gray-400 truncate font-mono" x-text="item.sha256.slice(0, 12) + '...'"></p>
+                        <div class="flex items-center justify-between mt-1">
+                            <span class="text-xs text-gray-500" x-text="formatSize(item.size)"></span>
+                            <button @click="deleteMedia(item.sha256)" class="text-xs text-red-400 hover:text-red-300 opacity-0 group-hover:opacity-100 transition">Delete</button>
+                        </div>
+                    </div>
+                </div>
+            </template>
+        </div>
+
+        <div x-show="blossomMediaItems.length === 0" class="text-center text-gray-500 py-12">
+            No media uploaded yet.
+        </div>
+    </main>
+
+    <!-- ==================== DELETE BLOSSOM MODAL ==================== -->
+    <div x-show="deleteBlossomTarget" class="fixed inset-0 z-50 flex items-center justify-center" x-cloak>
+        <div class="absolute inset-0 bg-black/50" @click="deleteBlossomTarget = null"></div>
+        <div class="relative bg-gray-900 border border-gray-800 rounded-lg p-6 max-w-sm w-full mx-4">
+            <h3 class="text-lg font-semibold mb-2">Delete Blossom Server</h3>
+            <p class="text-sm text-gray-400 mb-6">Are you sure you want to delete <span class="text-white font-medium" x-text="deleteBlossomTarget?.name"></span>? This cannot be undone.</p>
+            <div class="flex gap-3 justify-end">
+                <button @click="deleteBlossomTarget = null" class="text-sm text-gray-400 hover:text-white px-4 py-2 transition">Cancel</button>
+                <button @click="deleteBlossom()" class="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 transition">Delete</button>
+            </div>
+        </div>
+    </div>
+
     <!-- ==================== DELETE MODAL ==================== -->
     <div x-show="deleteTarget" class="fixed inset-0 z-50 flex items-center justify-center" x-cloak>
         <div class="absolute inset-0 bg-black/50" @click="deleteTarget = null"></div>
@@ -733,6 +976,18 @@
                 deleteWotError: '',
                 wotFormError: '',
                 wotForm: { id: '', seed: '', depth: 1, update_interval_hours: 24 },
+                blossoms: [],
+                editingBlossom: null,
+                deleteBlossomTarget: null,
+                blossomFormError: '',
+                blossomForm: {
+                    id: '', name: '', description: '', subdomain: '', storage_path: '', storage_path_manual: false,
+                    upload_allowed_pubkeys: [], list_require_auth: false, list_allowed_pubkeys: [], max_file_size_mb: '',
+                },
+                blossomMediaServer: null,
+                blossomMediaId: '',
+                blossomMediaItems: [],
+                uploadProgress: '',
                 form: {
                     id: '',
                     name: '',
@@ -901,6 +1156,7 @@
                     await this.fetchStatus();
                     await this.fetchRelays();
                     await this.fetchWots();
+                    await this.fetchBlossoms();
                     await this.fetchDiscoveryRelays();
                 },
 
@@ -1208,6 +1464,205 @@
                     } catch (e) {
                         this.deleteWotError = 'Network error: ' + e.message;
                     }
+                },
+
+                // ---- Blossom CRUD ----
+
+                async fetchBlossoms() {
+                    try {
+                        const res = await fetch('/api/blossoms');
+                        if (res.ok) {
+                            this.blossoms = await res.json();
+                        }
+                    } catch (e) { console.error('Failed to fetch blossoms', e); }
+                },
+
+                emptyBlossomForm() {
+                    return {
+                        id: '', name: '', description: '', subdomain: '', storage_path: '', storage_path_manual: false,
+                        upload_allowed_pubkeys: [], list_require_auth: false, list_allowed_pubkeys: [], max_file_size_mb: '',
+                    };
+                },
+
+                showBlossomCreateForm() {
+                    this.editingBlossom = null;
+                    this.blossomForm = this.emptyBlossomForm();
+                    this.blossomFormError = '';
+                    this.currentView = 'blossomForm';
+                },
+
+                showBlossomEditForm(blossom) {
+                    this.editingBlossom = blossom;
+                    this.blossomFormError = '';
+                    const p = blossom.policy || {};
+                    const u = p.upload || {};
+                    const l = p.list || {};
+                    this.blossomForm = {
+                        id: blossom.id,
+                        name: blossom.name,
+                        description: blossom.description || '',
+                        subdomain: blossom.subdomain,
+                        storage_path: blossom.storage_path,
+                        storage_path_manual: true,
+                        upload_allowed_pubkeys: [...(u.allowed_pubkeys || [])],
+                        list_require_auth: l.require_auth || false,
+                        list_allowed_pubkeys: [...(l.allowed_pubkeys || [])],
+                        max_file_size_mb: p.max_file_size ? Math.round(p.max_file_size / 1048576) : '',
+                    };
+                    this.currentView = 'blossomForm';
+                },
+
+                collectBlossomFormData() {
+                    const data = {
+                        name: this.blossomForm.name,
+                        description: this.blossomForm.description || null,
+                        subdomain: this.blossomForm.subdomain,
+                        storage_path: this.blossomForm.storage_path,
+                        policy: {
+                            upload: {
+                                allowed_pubkeys: this.blossomForm.upload_allowed_pubkeys.length ? this.blossomForm.upload_allowed_pubkeys : null,
+                            },
+                            list: {
+                                require_auth: this.blossomForm.list_require_auth,
+                                allowed_pubkeys: this.blossomForm.list_allowed_pubkeys.length ? this.blossomForm.list_allowed_pubkeys : null,
+                            },
+                            max_file_size: this.blossomForm.max_file_size_mb !== '' ? Number(this.blossomForm.max_file_size_mb) * 1048576 : null,
+                        }
+                    };
+                    if (!this.editingBlossom) {
+                        data.id = this.blossomForm.id;
+                    }
+                    return data;
+                },
+
+                async saveBlossom() {
+                    this.blossomFormError = '';
+                    const data = this.collectBlossomFormData();
+                    try {
+                        let res;
+                        if (this.editingBlossom) {
+                            res = await fetch(`/api/blossoms/${this.editingBlossom.id}`, {
+                                method: 'PUT',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(data),
+                            });
+                        } else {
+                            res = await fetch('/api/blossoms', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(data),
+                            });
+                        }
+                        if (res.ok || res.status === 201) {
+                            await this.fetchBlossoms();
+                            await this.fetchStatus();
+                            this.currentView = 'blossomList';
+                        } else if (res.status === 401) {
+                            window.location.href = '/';
+                        } else {
+                            this.blossomFormError = await res.text();
+                        }
+                    } catch (e) {
+                        this.blossomFormError = 'Network error: ' + e.message;
+                    }
+                },
+
+                confirmDeleteBlossom(blossom) {
+                    this.deleteBlossomTarget = blossom;
+                },
+
+                async deleteBlossom() {
+                    if (!this.deleteBlossomTarget) return;
+                    try {
+                        const res = await fetch(`/api/blossoms/${this.deleteBlossomTarget.id}`, { method: 'DELETE' });
+                        if (res.ok || res.status === 204) {
+                            this.deleteBlossomTarget = null;
+                            await this.fetchBlossoms();
+                            await this.fetchStatus();
+                            if (this.currentView === 'blossomForm') {
+                                this.currentView = 'blossomList';
+                            }
+                        } else if (res.status === 401) {
+                            window.location.href = '/';
+                        } else {
+                            alert('Delete failed: ' + await res.text());
+                        }
+                    } catch (e) {
+                        alert('Network error: ' + e.message);
+                    }
+                },
+
+                // ---- Blossom Media ----
+
+                async showBlossomMedia(blossom) {
+                    this.blossomMediaServer = blossom;
+                    this.blossomMediaId = blossom.id;
+                    this.blossomMediaItems = [];
+                    this.uploadProgress = '';
+                    this.currentView = 'blossomMedia';
+                    await this.fetchBlossomMedia();
+                },
+
+                async fetchBlossomMedia() {
+                    try {
+                        const res = await fetch(`/api/blossoms/${this.blossomMediaId}/media`);
+                        if (res.ok) {
+                            this.blossomMediaItems = await res.json();
+                        }
+                    } catch (e) { console.error('Failed to fetch media', e); }
+                },
+
+                async uploadMedia() {
+                    const input = this.$refs.blossomFileInput;
+                    if (!input || !input.files.length) return;
+
+                    this.uploadProgress = `Uploading ${input.files.length} file(s)...`;
+                    let uploaded = 0;
+
+                    for (const file of input.files) {
+                        const formData = new FormData();
+                        formData.append('file', file);
+                        try {
+                            const res = await fetch(`/api/blossoms/${this.blossomMediaId}/media`, {
+                                method: 'POST',
+                                body: formData,
+                            });
+                            if (res.ok) {
+                                uploaded++;
+                            } else {
+                                const err = await res.text();
+                                this.uploadProgress = `Error uploading ${file.name}: ${err}`;
+                                return;
+                            }
+                        } catch (e) {
+                            this.uploadProgress = `Error: ${e.message}`;
+                            return;
+                        }
+                    }
+
+                    this.uploadProgress = `Uploaded ${uploaded} file(s).`;
+                    input.value = '';
+                    await this.fetchBlossomMedia();
+                    setTimeout(() => { this.uploadProgress = ''; }, 3000);
+                },
+
+                async deleteMedia(sha256) {
+                    try {
+                        const res = await fetch(`/api/blossoms/${this.blossomMediaId}/media/${sha256}`, { method: 'DELETE' });
+                        if (res.ok || res.status === 204) {
+                            await this.fetchBlossomMedia();
+                        } else {
+                            alert('Delete failed: ' + await res.text());
+                        }
+                    } catch (e) {
+                        alert('Network error: ' + e.message);
+                    }
+                },
+
+                formatSize(bytes) {
+                    if (bytes < 1024) return bytes + ' B';
+                    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+                    return (bytes / 1048576).toFixed(1) + ' MB';
                 },
 
                 async logout() {
