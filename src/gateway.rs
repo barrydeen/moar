@@ -218,8 +218,16 @@ async fn login_handler(
         return (StatusCode::UNAUTHORIZED, e).into_response();
     }
 
-    let token = uuid::Uuid::new_v4().to_string();
     let pubkey = event.author().to_hex();
+
+    // Only the configured admin pubkey can log in
+    let config = state.config.read().await;
+    if pubkey != config.admin_pubkey {
+        return (StatusCode::FORBIDDEN, "Not authorized as admin").into_response();
+    }
+    drop(config);
+
+    let token = uuid::Uuid::new_v4().to_string();
 
     let session = SessionInfo {
         pubkey,
