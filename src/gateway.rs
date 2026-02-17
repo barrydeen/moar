@@ -192,7 +192,6 @@ async fn handler(
 pub fn admin_router() -> Router<Arc<GatewayState>> {
     Router::new()
         .route("/", get(serve_index))
-        .route("/admin", get(serve_admin))
         .route("/api/login", post(login_handler))
         .route("/api/logout", post(logout_handler))
         .route("/api/status", get(status_handler))
@@ -228,10 +227,6 @@ pub fn admin_router() -> Router<Arc<GatewayState>> {
 
 async fn serve_index() -> impl IntoResponse {
     Html(include_str!("web/index.html"))
-}
-
-async fn serve_admin() -> impl IntoResponse {
-    Html(include_str!("web/admin.html"))
 }
 
 // --- Auth helpers ---

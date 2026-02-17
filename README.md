@@ -47,7 +47,7 @@ cargo build --release
 ./target/release/moar start
 ```
 
-The gateway starts on `http://localhost:8080` by default. Access the admin dashboard at `http://localhost:8080/admin`.
+The gateway starts on `http://localhost:8080` by default.
 
 ### CLI Usage
 
@@ -160,7 +160,7 @@ allowed_kinds = [4, 1059]
 
 ## Admin API
 
-The admin dashboard is available at the gateway's root domain. Authentication uses NIP-98 via a Nostr browser extension (nos2x, Alby, etc.).
+The admin dashboard is served on port 8888 (via the `admin` container). Authentication uses NIP-98 via a Nostr browser extension (nos2x, Alby, etc.).
 
 ### Endpoints
 
@@ -205,25 +205,58 @@ Client (WebSocket)
 
 ## Development
 
-```bash
-# Run tests
-cargo test
+### Local Docker Setup
 
-# Run with logging
+The easiest way to run the full stack locally. Uses plain HTTP (no TLS).
+
+```bash
+# 1. Set up your environment
+cp .env.example .env
+# Edit .env — set ADMIN_PUBKEY to your hex pubkey
+
+# 2. Create data directories
+mkdir -p data config pages
+
+# 3. Start all services
+docker compose -f docker-compose.dev.yml up -d --build
+```
+
+This starts three containers:
+- **server** (`localhost:8080`) — MOAR relay gateway
+- **admin** — Next.js admin panel
+- **caddy** (`localhost:8888`) — Reverse proxy serving the admin UI with API passthrough
+
+Visit `http://localhost:8888` to access the admin panel. Login with a NIP-07 browser extension (nos2x, Alby, etc.) using the pubkey from your `.env`.
+
+To rebuild after code changes:
+```bash
+docker compose -f docker-compose.dev.yml up -d --build
+```
+
+### Bare-Metal
+
+```bash
+# Run the Rust server
 RUST_LOG=debug cargo run -- start
 
-# Run specific test suites
-cargo test --lib policy         # Policy engine tests
-cargo test integration_         # Integration tests
+# In another terminal, run the admin dev server (hot reload)
+cd admin && npm install && npm run dev
+```
+
+The admin dev server runs on `http://localhost:3000` and proxies API calls to `localhost:8080`.
+
+### Tests
+
+```bash
+cargo test                       # All tests
+cargo test --lib policy          # Policy engine tests
+cargo test integration_          # Integration tests
 ```
 
 ## Roadmap
 
 - **JSONL Import/Export** - Bulk import and export events in JSONL format for backups and migration between relays
-- **Custom Relay Home Pages** - Serve a customizable HTML landing page per relay when accessed via browser
 - **Relay Metadata (NIP-11)** - Serve relay information documents with operator info, supported NIPs, and policy details
-- **Blossom Support** - Integrate with the Blossom protocol for media/file hosting alongside your relay
-- **Web of Trust Filter** - Policy rules based on social graph distance, allowing writes from followed/trusted pubkeys
 - **Onboarding/Setup Wizard** - Guided first-run experience to configure your domain, create initial relays, and set up admin access
 
 ## License
