@@ -48,6 +48,22 @@ export const relayFormSchema = z.object({
       .nullable()
       .optional(),
   }),
+  nip11: z
+    .object({
+      icon: z.string().url("Must be a valid URL").or(z.literal("")).optional(),
+      banner: z.string().url("Must be a valid URL").or(z.literal("")).optional(),
+      contact: z.string().optional(),
+      terms_of_service: z.string().url("Must be a valid URL").or(z.literal("")).optional(),
+      max_message_length: z.coerce.number().int().min(0).nullable().optional(),
+      max_subscriptions: z.coerce.number().int().min(0).nullable().optional(),
+      max_subid_length: z.coerce.number().int().min(0).nullable().optional(),
+      max_limit: z.coerce.number().int().min(0).nullable().optional(),
+      max_event_tags: z.coerce.number().int().min(0).nullable().optional(),
+      default_limit: z.coerce.number().int().min(0).nullable().optional(),
+      created_at_lower_limit: z.coerce.number().int().min(0).nullable().optional(),
+      created_at_upper_limit: z.coerce.number().int().min(0).nullable().optional(),
+    })
+    .optional(),
 });
 
 export type RelayFormData = z.infer<typeof relayFormSchema>;

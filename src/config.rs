@@ -50,6 +50,25 @@ pub struct RelayConfig {
     pub db_path: String,
     #[serde(default)]
     pub policy: PolicyConfig,
+    #[serde(default)]
+    pub nip11: Nip11Config,
+}
+
+/// Optional NIP-11 relay information fields and limit overrides.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Nip11Config {
+    pub icon: Option<String>,
+    pub banner: Option<String>,
+    pub contact: Option<String>,
+    pub terms_of_service: Option<String>,
+    pub max_message_length: Option<u64>,
+    pub max_subscriptions: Option<u64>,
+    pub max_subid_length: Option<u64>,
+    pub max_limit: Option<u64>,
+    pub max_event_tags: Option<u64>,
+    pub default_limit: Option<u64>,
+    pub created_at_lower_limit: Option<u64>,
+    pub created_at_upper_limit: Option<u64>,
 }
 
 /// Composable policy configuration — every field is optional and defaults to

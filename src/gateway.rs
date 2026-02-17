@@ -72,12 +72,19 @@ pub async fn start_gateway(
     let mut config_map = HashMap::new();
 
     for (key, (relay_config, store, policy)) in relays {
+        let scheme = if domain == "localhost" { "http" } else { "https" };
+        let relay_url = format!(
+            "{}://{}.{}",
+            scheme, relay_config.subdomain, domain
+        );
         let state = Arc::new(RelayState::new(
             relay_config.clone(),
             store,
             policy,
             key.clone(),
             pages_dir.clone(),
+            config.admin_pubkey.clone(),
+            relay_url,
         ));
         let app = server::create_relay_router(state);
         router_map.insert(relay_config.subdomain.clone(), app);

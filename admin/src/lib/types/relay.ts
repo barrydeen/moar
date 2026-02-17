@@ -31,12 +31,28 @@ export interface PolicyConfig {
   rate_limit?: RateLimitConfig | null;
 }
 
+export interface Nip11Config {
+  icon?: string | null;
+  banner?: string | null;
+  contact?: string | null;
+  terms_of_service?: string | null;
+  max_message_length?: number | null;
+  max_subscriptions?: number | null;
+  max_subid_length?: number | null;
+  max_limit?: number | null;
+  max_event_tags?: number | null;
+  default_limit?: number | null;
+  created_at_lower_limit?: number | null;
+  created_at_upper_limit?: number | null;
+}
+
 export interface RelayConfig {
   name: string;
   description?: string | null;
   subdomain: string;
   db_path: string;
   policy: PolicyConfig;
+  nip11?: Nip11Config;
 }
 
 export interface Relay {
@@ -46,6 +62,7 @@ export interface Relay {
   subdomain: string;
   db_path: string;
   policy: PolicyConfig;
+  nip11?: Nip11Config;
 }
 
 export interface RelayPage {
