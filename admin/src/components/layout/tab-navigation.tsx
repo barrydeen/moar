@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { Radio, HardDrive, Shield } from "lucide-react";
+import { Radio, HardDrive, Shield, Settings } from "lucide-react";
 
 const tabs = [
   { href: "/admin/relays", label: "Relays", icon: Radio },
   { href: "/admin/blossoms", label: "Blossom", icon: HardDrive },
   { href: "/admin/wot", label: "Web of Trust", icon: Shield },
+  { href: "/admin/system", label: "System", icon: Settings },
 ];
 
 export function TabNavigation() {

@@ -7,10 +7,12 @@ services:
       - MOAR_DOMAIN=${MOAR_DOMAIN}
       - ADMIN_PUBKEY=${ADMIN_PUBKEY}
       - RUST_LOG=${RUST_LOG:-info}
+      - MANAGER_SECRET=${MANAGER_SECRET}
     volumes:
       - ./data:/app/data
       - ./config:/app/config
       - ./pages:/app/data/pages
+      - manager_status:/status:ro
     restart: unless-stopped
     networks:
       - moar
@@ -40,9 +42,24 @@ services:
     networks:
       - moar
 
+  manager:
+    build:
+      context: ./docker/manager
+      dockerfile: Dockerfile
+    environment:
+      - MANAGER_SECRET=${MANAGER_SECRET}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - .:/project:rw
+      - manager_status:/status:rw
+    restart: unless-stopped
+    networks:
+      - moar
+
 volumes:
   caddy_data:
   caddy_config:
+  manager_status:
 
 networks:
   moar:

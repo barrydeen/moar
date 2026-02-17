@@ -1160,6 +1160,7 @@ dependencies = [
  "mime_guess",
  "nostr",
  "once_cell",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",

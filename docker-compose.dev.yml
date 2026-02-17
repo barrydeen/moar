@@ -7,10 +7,12 @@ services:
       - MOAR_DOMAIN=localhost
       - ADMIN_PUBKEY=${ADMIN_PUBKEY}
       - RUST_LOG=${RUST_LOG:-info}
+      - MANAGER_SECRET=${MANAGER_SECRET:-dev-manager-secret}
     volumes:
       - ./data:/app/data
       - ./config:/app/config
       - ./pages:/app/data/pages
+      - manager_status:/status:ro
     restart: unless-stopped
     networks:
       - moar
@@ -29,12 +31,29 @@ services:
     image: caddy:2-alpine
     ports:
       - "8888:8888"
-      - "8080:8080"
+      - "80:80"
     volumes:
       - ./docker/Caddyfile.dev:/etc/caddy/Caddyfile
     restart: unless-stopped
     networks:
       - moar
+
+  manager:
+    build:
+      context: ./docker/manager
+      dockerfile: Dockerfile
+    environment:
+      - MANAGER_SECRET=${MANAGER_SECRET:-dev-manager-secret}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - .:/project:rw
+      - manager_status:/status:rw
+    restart: unless-stopped
+    networks:
+      - moar
+
+volumes:
+  manager_status:
 
 networks:
   moar:
