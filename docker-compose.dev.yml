@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: docker/Dockerfile
     environment:
-      - MOAR_DOMAIN=${MOAR_DOMAIN}
+      - MOAR_DOMAIN=localhost
       - ADMIN_PUBKEY=${ADMIN_PUBKEY}
       - RUST_LOG=${RUST_LOG:-info}
     volumes:
@@ -26,23 +26,15 @@ services:
       - moar
 
   caddy:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.caddy
+    image: caddy:2-alpine
     ports:
-      - "80:80"
-      - "443:443"
       - "8888:8888"
+      - "8080:8080"
     volumes:
-      - caddy_data:/data
-      - caddy_config:/config
+      - ./docker/Caddyfile.dev:/etc/caddy/Caddyfile
     restart: unless-stopped
     networks:
       - moar
-
-volumes:
-  caddy_data:
-  caddy_config:
 
 networks:
   moar:

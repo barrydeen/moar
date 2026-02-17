@@ -1,0 +1,14 @@
+# Dev Caddyfile — no TLS, plain HTTP
+
+:8080 {
+    reverse_proxy server:8080
+}
+
+:8888 {
+    handle /api/* {
+        reverse_proxy server:8080
+    }
+    handle {
+        reverse_proxy admin:3000
+    }
+}
