@@ -5,6 +5,9 @@ use std::collections::HashMap;
 pub struct MoarConfig {
     pub domain: String,
     pub port: u16,
+    /// Hex pubkey of the admin allowed to access the admin UI.
+    /// Only this pubkey can log in via NIP-98 auth.
+    pub admin_pubkey: String,
     /// Directory for custom relay home pages (default: "pages").
     /// Each relay can have a `{relay_id}.html` file in this directory.
     #[serde(default = "default_pages_dir")]

@@ -1,5 +1,7 @@
 domain = "localhost"
 port = 8080
+# Hex pubkey of the admin — only this key can log into the admin UI
+admin_pubkey = "your-hex-pubkey-here"
 # Directory for custom relay home pages (default: "pages")
 # Place {relay_id}.html files here, or edit via the admin UI
 pages_dir = "pages"
