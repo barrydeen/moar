@@ -1,5 +1,5 @@
-import { apiFetch } from "./client";
-import type { Relay, RelayConfig, RelayPage } from "../types/relay";
+import { apiFetch, apiUpload } from "./client";
+import type { Relay, RelayConfig, RelayPage, ImportResult } from "../types/relay";
 
 export async function listRelays(): Promise<Relay[]> {
   return apiFetch<Relay[]>("/relays");
@@ -49,4 +49,14 @@ export async function putRelayPage(
 
 export async function deleteRelayPage(id: string): Promise<void> {
   return apiFetch<void>(`/relays/${id}/page`, { method: "DELETE" });
+}
+
+export function exportRelayUrl(id: string): string {
+  return `/api/relays/${id}/export`;
+}
+
+export async function importRelay(id: string, file: File): Promise<ImportResult> {
+  const formData = new FormData();
+  formData.append("file", file);
+  return apiUpload<ImportResult>(`/relays/${id}/import`, formData);
 }

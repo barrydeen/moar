@@ -68,3 +68,9 @@ export interface Relay {
 export interface RelayPage {
   html: string | null;
 }
+
+export interface ImportResult {
+  imported: number;
+  skipped: number;
+  errors: number;
+}
