@@ -55,12 +55,15 @@ if [ "$INSTALL_METHOD" = "docker" ]; then
         cd "$INSTALL_DIR"
     fi
 
+    MANAGER_SECRET=$(openssl rand -hex 32)
+
     echo ""
     echo "Writing .env..."
     cat > .env <<EOF
 MOAR_DOMAIN=${MOAR_DOMAIN}
 ADMIN_PUBKEY=${ADMIN_PUBKEY}
 RUST_LOG=info
+MANAGER_SECRET=${MANAGER_SECRET}
 EOF
 
     mkdir -p data config pages

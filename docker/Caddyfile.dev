@@ -1,6 +1,6 @@
 # Dev Caddyfile — no TLS, plain HTTP
 
-:8080 {
+:80 {
     reverse_proxy server:8080
 }
 

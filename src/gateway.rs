@@ -235,6 +235,9 @@ pub fn admin_router() -> Router<Arc<GatewayState>> {
         )
         .route("/api/blossoms/:id/media", get(list_blossom_media).post(upload_blossom_media))
         .route("/api/blossoms/:id/media/:sha256", delete_route(delete_blossom_media))
+        .route("/api/restart", post(restart_handler))
+        .route("/api/update", post(update_handler))
+        .route("/api/update-status", get(update_status_handler))
         .route("/.well-known/caddy-ask", get(caddy_ask_handler))
 }
 
@@ -1454,6 +1457,122 @@ async fn delete_blossom_media(
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => (StatusCode::NOT_FOUND, "Blob not found").into_response(),
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Delete failed").into_response(),
+    }
+}
+
+// --- Restart Handler ---
+
+async fn restart_handler(
+    State(state): State<Arc<GatewayState>>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    tracing::info!("Restart requested via admin UI — exiting process for container restart");
+
+    // Spawn a delayed exit so the HTTP response is sent first
+    tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        std::process::exit(0);
+    });
+
+    (StatusCode::OK, "Restarting...").into_response()
+}
+
+// --- Update Handlers ---
+
+async fn update_handler(
+    State(state): State<Arc<GatewayState>>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    let manager_secret = match std::env::var("MANAGER_SECRET") {
+        Ok(s) if !s.is_empty() => s,
+        _ => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Update service not configured (MANAGER_SECRET not set)",
+            )
+                .into_response()
+        }
+    };
+
+    tracing::info!("Update requested via admin UI");
+
+    let client = reqwest::Client::new();
+    match client
+        .post("http://manager:9090/update")
+        .bearer_auth(&manager_secret)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            (StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY), body)
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            format!("Failed to reach update service: {}", e),
+        )
+            .into_response(),
+    }
+}
+
+async fn update_status_handler(
+    State(state): State<Arc<GatewayState>>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    // Try reading from shared volume first
+    let status_path = std::path::Path::new("/status/update.json");
+    if status_path.exists() {
+        if let Ok(contents) = tokio::fs::read_to_string(status_path).await {
+            return (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "application/json")],
+                contents,
+            )
+                .into_response();
+        }
+    }
+
+    // Fallback: proxy to manager service
+    let manager_secret = match std::env::var("MANAGER_SECRET") {
+        Ok(s) if !s.is_empty() => s,
+        _ => {
+            return Json(serde_json::json!({"status": "idle"})).into_response();
+        }
+    };
+
+    let client = reqwest::Client::new();
+    match client
+        .get("http://manager:9090/status")
+        .bearer_auth(&manager_secret)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let body = resp.text().await.unwrap_or_default();
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "application/json")],
+                body,
+            )
+                .into_response()
+        }
+        Err(_) => Json(serde_json::json!({"status": "idle"})).into_response(),
     }
 }
 
