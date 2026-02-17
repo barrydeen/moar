@@ -11,7 +11,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -27,6 +27,7 @@ pub struct GatewayState {
     pub relay_configs: HashMap<String, RelayConfig>,
     pub config: Arc<RwLock<MoarConfig>>,
     pub config_path: PathBuf,
+    pub pages_dir: PathBuf,
     pub pending_restart: Arc<RwLock<bool>>,
     pub sessions: Arc<RwLock<HashMap<String, SessionInfo>>>,
 }
@@ -54,14 +55,24 @@ pub async fn start_gateway(
     config: MoarConfig,
     config_path: PathBuf,
 ) -> crate::error::Result<()> {
+    let pages_dir = PathBuf::from(&config.pages_dir);
+    // Ensure the pages directory exists
+    let _ = tokio::fs::create_dir_all(&pages_dir).await;
+
     let mut router_map = HashMap::new();
     let mut config_map = HashMap::new();
 
-    for (_key, (config, store, policy)) in relays {
-        let state = Arc::new(RelayState::new(config.clone(), store, policy));
+    for (key, (relay_config, store, policy)) in relays {
+        let state = Arc::new(RelayState::new(
+            relay_config.clone(),
+            store,
+            policy,
+            key.clone(),
+            pages_dir.clone(),
+        ));
         let app = server::create_relay_router(state);
-        router_map.insert(config.subdomain.clone(), app);
-        config_map.insert(config.subdomain.clone(), config);
+        router_map.insert(relay_config.subdomain.clone(), app);
+        config_map.insert(relay_config.subdomain.clone(), relay_config);
     }
 
     let state = Arc::new(GatewayState {
@@ -71,6 +82,7 @@ pub async fn start_gateway(
         relay_configs: config_map,
         config: Arc::new(RwLock::new(config)),
         config_path,
+        pages_dir,
         pending_restart: Arc::new(RwLock::new(false)),
         sessions: Arc::new(RwLock::new(HashMap::new())),
     });
@@ -146,6 +158,10 @@ pub fn admin_router() -> Router<Arc<GatewayState>> {
         .route(
             "/api/relays/:id",
             get(get_relay).put(update_relay).delete(delete_relay),
+        )
+        .route(
+            "/api/relays/:id/page",
+            get(get_relay_page).put(put_relay_page).delete(delete_relay_page),
         )
 }
 
@@ -493,6 +509,106 @@ async fn delete_relay(
         }
         return resp;
     }
+
+    StatusCode::NO_CONTENT.into_response()
+}
+
+// --- Relay Page Handlers ---
+
+fn sanitize_relay_id_for_path(id: &str) -> Result<(), Response> {
+    // Prevent path traversal
+    if id.contains('.') || id.contains('/') || id.contains('\\') {
+        return Err((StatusCode::BAD_REQUEST, "Invalid relay ID").into_response());
+    }
+    Ok(())
+}
+
+async fn get_relay_page(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) = sanitize_relay_id_for_path(&id) {
+        return resp;
+    }
+
+    // Verify relay exists
+    let config = state.config.read().await;
+    if !config.relays.contains_key(&id) {
+        return (StatusCode::NOT_FOUND, "Relay not found").into_response();
+    }
+    drop(config);
+
+    let page_path = state.pages_dir.join(format!("{}.html", id));
+    match tokio::fs::read_to_string(&page_path).await {
+        Ok(content) => Json(serde_json::json!({ "html": content })).into_response(),
+        Err(_) => Json(serde_json::json!({ "html": null::<String> })).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct PagePayload {
+    html: String,
+}
+
+async fn put_relay_page(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    if let Err(resp) = sanitize_relay_id_for_path(&id) {
+        return resp;
+    }
+
+    // Verify relay exists
+    let config = state.config.read().await;
+    if !config.relays.contains_key(&id) {
+        return (StatusCode::NOT_FOUND, "Relay not found").into_response();
+    }
+    drop(config);
+
+    let body = match axum::body::to_bytes(request.into_body(), 1024 * 512).await {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Body too large (max 512KB)").into_response(),
+    };
+
+    let payload: PagePayload = match serde_json::from_slice(&body) {
+        Ok(p) => p,
+        Err(e) => return (StatusCode::BAD_REQUEST, format!("Invalid JSON: {}", e)).into_response(),
+    };
+
+    // Ensure pages directory exists
+    let _ = tokio::fs::create_dir_all(&state.pages_dir).await;
+
+    let page_path = state.pages_dir.join(format!("{}.html", id));
+    match tokio::fs::write(&page_path, &payload.html).await {
+        Ok(_) => (StatusCode::OK, "Page saved").into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to write page: {}", e),
+        )
+            .into_response(),
+    }
+}
+
+async fn delete_relay_page(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    if let Err(resp) = sanitize_relay_id_for_path(&id) {
+        return resp;
+    }
+
+    let page_path = state.pages_dir.join(format!("{}.html", id));
+    let _ = tokio::fs::remove_file(&page_path).await;
 
     StatusCode::NO_CONTENT.into_response()
 }

@@ -5,7 +5,15 @@ use std::collections::HashMap;
 pub struct MoarConfig {
     pub domain: String,
     pub port: u16,
+    /// Directory for custom relay home pages (default: "pages").
+    /// Each relay can have a `{relay_id}.html` file in this directory.
+    #[serde(default = "default_pages_dir")]
+    pub pages_dir: String,
     pub relays: HashMap<String, RelayConfig>,
+}
+
+fn default_pages_dir() -> String {
+    "pages".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

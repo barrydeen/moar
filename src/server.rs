@@ -3,12 +3,13 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         State,
     },
-    response::IntoResponse,
+    response::{Html, IntoResponse},
     routing::get,
     Router,
 };
 use futures::{sink::SinkExt, stream::StreamExt};
 use nostr::{ClientMessage, Event, JsonUtil, RelayMessage};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
@@ -20,16 +21,26 @@ pub struct RelayState {
     pub store: Arc<dyn NostrStore>,
     pub policy: Arc<PolicyEngine>,
     pub config: RelayConfig,
+    pub relay_id: String,
+    pub pages_dir: PathBuf,
     pub tx: broadcast::Sender<Event>,
 }
 
 impl RelayState {
-    pub fn new(config: RelayConfig, store: Arc<dyn NostrStore>, policy: Arc<PolicyEngine>) -> Self {
+    pub fn new(
+        config: RelayConfig,
+        store: Arc<dyn NostrStore>,
+        policy: Arc<PolicyEngine>,
+        relay_id: String,
+        pages_dir: PathBuf,
+    ) -> Self {
         let (tx, _rx) = broadcast::channel(100);
         Self {
             store,
             policy,
             config,
+            relay_id,
+            pages_dir,
             tx,
         }
     }
@@ -37,15 +48,71 @@ impl RelayState {
 
 pub fn create_relay_router(state: Arc<RelayState>) -> Router {
     Router::new()
-        .route("/", get(websocket_handler))
+        .route("/", get(root_handler))
         .with_state(state)
 }
 
-async fn websocket_handler(
-    ws: WebSocketUpgrade,
+/// Handles both WebSocket upgrades and regular HTTP GET requests.
+/// If the request is a WebSocket upgrade, hand off to the WS handler.
+/// Otherwise, serve the relay's custom home page (or a default).
+async fn root_handler(
+    ws: Option<WebSocketUpgrade>,
     State(state): State<Arc<RelayState>>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(|socket| handle_socket(socket, state))
+    // WebSocket upgrade takes priority
+    if let Some(ws) = ws {
+        return ws.on_upgrade(|socket| handle_socket(socket, state)).into_response();
+    }
+
+    // Serve custom home page if it exists
+    let page_path = state.pages_dir.join(format!("{}.html", state.relay_id));
+    if let Ok(content) = tokio::fs::read_to_string(&page_path).await {
+        return Html(content).into_response();
+    }
+
+    // Default relay info page
+    let name = html_escape(&state.config.name);
+    let desc = state
+        .config
+        .description
+        .as_deref()
+        .unwrap_or("A Nostr relay powered by MOAR");
+    let desc = html_escape(desc);
+
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{name}</title>
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{background:#0a0a0a;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh}}
+.container{{text-align:center;max-width:480px;padding:2rem}}
+h1{{font-size:1.5rem;margin-bottom:0.5rem}}
+p{{color:#888;font-size:0.95rem;line-height:1.5}}
+.badge{{display:inline-block;background:#1a1a2e;border:1px solid #333;border-radius:9999px;padding:0.25rem 0.75rem;font-size:0.75rem;color:#aaa;margin-top:1rem;font-family:monospace}}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>{name}</h1>
+<p>{desc}</p>
+<span class="badge">Nostr Relay</span>
+</div>
+</body>
+</html>"#
+    );
+
+    Html(html).into_response()
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 async fn handle_socket(socket: WebSocket, state: Arc<RelayState>) {

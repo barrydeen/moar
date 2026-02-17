@@ -100,7 +100,13 @@ pub async fn spawn_relay(policy: PolicyConfig) -> (u16, Arc<MockStore>) {
         db_path: "/tmp/moar-test-unused".into(),
         policy,
     };
-    let state = Arc::new(RelayState::new(config, store_dyn, policy_engine));
+    let state = Arc::new(RelayState::new(
+        config,
+        store_dyn,
+        policy_engine,
+        "test".into(),
+        std::path::PathBuf::from("/tmp/moar-test-pages"),
+    ));
     let app = create_relay_router(state);
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

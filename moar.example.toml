@@ -1,5 +1,8 @@
 domain = "localhost"
 port = 8080
+# Directory for custom relay home pages (default: "pages")
+# Place {relay_id}.html files here, or edit via the admin UI
+pages_dir = "pages"
 
 # DM Relay - Authenticated read/write, restricted to specific event kinds
 [relays.dms]

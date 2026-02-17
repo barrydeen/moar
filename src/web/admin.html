@@ -243,6 +243,20 @@
             </div>
         </div>
 
+        <!-- Custom Home Page -->
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 mb-4" x-show="editingRelay">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-sm font-medium text-gray-400">Custom Home Page</h3>
+                <div class="flex items-center gap-2">
+                    <button @click="previewPage()" x-show="form.page_html" class="text-xs text-gray-400 hover:text-white border border-gray-700 rounded px-2 py-1 transition">Preview</button>
+                    <button @click="form.page_html ? deletePage() : null" x-show="form.page_html" class="text-xs text-red-400 hover:text-red-300 px-2 py-1 transition">Remove</button>
+                </div>
+            </div>
+            <p class="text-xs text-gray-500 mb-3">Custom HTML served when someone visits this relay's URL in a browser. Leave empty for the default page. You can also place a file at <code class="bg-gray-800 px-1 rounded">pages/<span x-text="form.id"></span>.html</code>.</p>
+            <textarea x-model="form.page_html" rows="12" placeholder="<!DOCTYPE html>&#10;<html>&#10;  <head><title>My Relay</title></head>&#10;  <body>...</body>&#10;</html>"
+                class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600 font-mono" spellcheck="false"></textarea>
+        </div>
+
         <!-- Rate Limits -->
         <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 mb-6">
             <h3 class="text-sm font-medium text-gray-400 mb-4">Rate Limits</h3>
@@ -333,6 +347,7 @@
                     max_content_length: '',
                     writes_per_minute: '',
                     reads_per_minute: '',
+                    page_html: '',
                 },
 
                 emptyForm() {
@@ -354,6 +369,7 @@
                         max_content_length: '',
                         writes_per_minute: '',
                         reads_per_minute: '',
+                        page_html: '',
                     };
                 },
 
@@ -391,7 +407,7 @@
                     this.currentView = 'form';
                 },
 
-                showEditForm(relay) {
+                async showEditForm(relay) {
                     this.editingRelay = relay;
                     this.formError = '';
                     const p = relay.policy || {};
@@ -417,7 +433,16 @@
                         max_content_length: e.max_content_length ?? '',
                         writes_per_minute: rl.writes_per_minute ?? '',
                         reads_per_minute: rl.reads_per_minute ?? '',
+                        page_html: '',
                     };
+                    // Fetch custom page
+                    try {
+                        const res = await fetch(`/api/relays/${relay.id}/page`);
+                        if (res.ok) {
+                            const data = await res.json();
+                            this.form.page_html = data.html || '';
+                        }
+                    } catch (e) { console.error('Failed to fetch page', e); }
                     this.currentView = 'form';
                 },
 
@@ -476,6 +501,15 @@
                         }
 
                         if (res.ok) {
+                            // Save custom page if editing
+                            const relayId = this.editingRelay ? this.editingRelay.id : this.form.id;
+                            if (this.form.page_html) {
+                                await fetch(`/api/relays/${relayId}/page`, {
+                                    method: 'PUT',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ html: this.form.page_html }),
+                                });
+                            }
                             await this.fetchRelays();
                             await this.fetchStatus();
                             this.currentView = 'list';
@@ -512,6 +546,18 @@
                     } catch (e) {
                         alert('Network error: ' + e.message);
                     }
+                },
+
+                previewPage() {
+                    const win = window.open('', '_blank');
+                    win.document.write(this.form.page_html);
+                    win.document.close();
+                },
+
+                async deletePage() {
+                    if (!this.editingRelay) return;
+                    await fetch(`/api/relays/${this.editingRelay.id}/page`, { method: 'DELETE' });
+                    this.form.page_html = '';
                 },
 
                 async logout() {
