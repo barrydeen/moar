@@ -92,7 +92,7 @@ impl NostrStore for MockStore {
 pub async fn spawn_relay(policy: PolicyConfig) -> (u16, Arc<MockStore>) {
     let store = Arc::new(MockStore::new());
     let store_dyn: Arc<dyn NostrStore> = store.clone();
-    let policy_engine = Arc::new(PolicyEngine::new(policy.clone()));
+    let policy_engine = Arc::new(PolicyEngine::new(policy.clone(), None, None));
     let config = RelayConfig {
         name: "test".into(),
         description: None,

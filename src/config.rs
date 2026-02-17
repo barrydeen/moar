@@ -12,7 +12,28 @@ pub struct MoarConfig {
     /// Each relay can have a `{relay_id}.html` file in this directory.
     #[serde(default = "default_pages_dir")]
     pub pages_dir: String,
+    #[serde(default)]
+    pub discovery_relays: Vec<String>,
+    #[serde(default)]
+    pub wots: HashMap<String, WotConfig>,
     pub relays: HashMap<String, RelayConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WotConfig {
+    pub seed: String,
+    #[serde(default = "default_wot_depth")]
+    pub depth: u8,
+    #[serde(default = "default_update_interval")]
+    pub update_interval_hours: u64,
+}
+
+fn default_wot_depth() -> u8 {
+    1
+}
+
+fn default_update_interval() -> u64 {
+    24
 }
 
 fn default_pages_dir() -> String {
@@ -55,6 +76,8 @@ pub struct WritePolicy {
     /// If set, events are only accepted if they contain a `p` tag referencing
     /// one of these pubkeys.  Useful for inbox/DM relays.
     pub tagged_pubkeys: Option<Vec<String>>,
+    /// If set, only pubkeys in the referenced Web of Trust are allowed to write.
+    pub wot: Option<String>,
 }
 
 impl Default for WritePolicy {
@@ -64,6 +87,7 @@ impl Default for WritePolicy {
             allowed_pubkeys: None,
             blocked_pubkeys: None,
             tagged_pubkeys: None,
+            wot: None,
         }
     }
 }
@@ -76,6 +100,8 @@ pub struct ReadPolicy {
     pub require_auth: bool,
     /// If set, only these pubkeys may read.  `None` = anyone can read.
     pub allowed_pubkeys: Option<Vec<String>>,
+    /// If set, only pubkeys in the referenced Web of Trust are allowed to read.
+    pub wot: Option<String>,
 }
 
 impl Default for ReadPolicy {
@@ -83,6 +109,7 @@ impl Default for ReadPolicy {
         Self {
             require_auth: false,
             allowed_pubkeys: None,
+            wot: None,
         }
     }
 }

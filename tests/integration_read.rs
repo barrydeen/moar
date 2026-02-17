@@ -72,6 +72,7 @@ async fn read_allow_list_without_auth_returns_notice_blocked() {
         read: ReadPolicy {
             require_auth: false,
             allowed_pubkeys: Some(vec![keys.public_key().to_string()]),
+            wot: None,
         },
         ..Default::default()
     };
