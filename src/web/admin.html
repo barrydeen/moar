@@ -33,6 +33,14 @@
         Configuration saved. Restart MOAR to apply changes.
     </div>
 
+    <!-- Tab Navigation -->
+    <nav x-show="currentView === 'list' || currentView === 'wotList'" class="max-w-4xl mx-auto px-6 pt-6">
+        <div class="flex gap-1 border-b border-gray-800">
+            <button @click="currentView = 'list'" class="px-4 py-2 text-sm font-medium border-b-2 transition" :class="currentView === 'list' ? 'border-white text-white' : 'border-transparent text-gray-400 hover:text-white'">Relays</button>
+            <button @click="currentView = 'wotList'; fetchWots()" class="px-4 py-2 text-sm font-medium border-b-2 transition" :class="currentView === 'wotList' ? 'border-white text-white' : 'border-transparent text-gray-400 hover:text-white'">Web of Trust</button>
+        </div>
+    </nav>
+
     <!-- ==================== RELAY LIST VIEW ==================== -->
     <main x-show="currentView === 'list'" class="max-w-4xl mx-auto px-6 py-8">
         <div class="flex items-center justify-between mb-6">
@@ -69,6 +77,12 @@
                         </template>
                         <template x-if="relay.policy?.events?.allowed_kinds?.length">
                             <span class="bg-gray-800 text-gray-300 rounded-full px-2 py-1 text-xs" x-text="'Kinds: ' + relay.policy.events.allowed_kinds.join(', ')"></span>
+                        </template>
+                        <template x-if="relay.policy?.write?.wot">
+                            <span class="bg-cyan-500/10 text-cyan-400 rounded-full px-2 py-1 text-xs" x-text="'Write WoT: ' + relay.policy.write.wot"></span>
+                        </template>
+                        <template x-if="relay.policy?.read?.wot">
+                            <span class="bg-cyan-500/10 text-cyan-400 rounded-full px-2 py-1 text-xs" x-text="'Read WoT: ' + relay.policy.read.wot"></span>
                         </template>
                         <template x-if="relay.policy?.rate_limit">
                             <span class="bg-gray-800 text-gray-300 rounded-full px-2 py-1 text-xs">Rate Limited</span>
@@ -387,6 +401,17 @@
                     <button type="button" @click="addTag({ target: $el.previousElementSibling }, form.write_tagged_pubkeys)" class="bg-gray-800 border border-gray-700 hover:border-gray-500 text-gray-300 hover:text-white rounded-lg px-3 py-2 text-sm transition">Add</button>
                 </div>
             </div>
+
+            <div class="mt-4" x-show="wots.length > 0">
+                <label class="block text-sm text-gray-400 mb-1">Web of Trust</label>
+                <p class="text-xs text-gray-500 mb-2">If set, only pubkeys in this WoT can write.</p>
+                <select x-model="form.write_wot" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-gray-600">
+                    <option value="">None</option>
+                    <template x-for="wot in wots" :key="wot.id">
+                        <option :value="wot.id" x-text="wot.id + ' (' + wot.pubkey_count + ' keys, ' + wot.status.state + ')'"></option>
+                    </template>
+                </select>
+            </div>
         </div>
 
         <!-- Read Policy -->
@@ -415,6 +440,17 @@
                         class="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
                     <button type="button" @click="addTag({ target: $el.previousElementSibling }, form.read_allowed_pubkeys)" class="bg-gray-800 border border-gray-700 hover:border-gray-500 text-gray-300 hover:text-white rounded-lg px-3 py-2 text-sm transition">Add</button>
                 </div>
+            </div>
+
+            <div class="mt-4" x-show="wots.length > 0">
+                <label class="block text-sm text-gray-400 mb-1">Web of Trust</label>
+                <p class="text-xs text-gray-500 mb-2">If set, only pubkeys in this WoT can read (requires AUTH).</p>
+                <select x-model="form.read_wot" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-gray-600">
+                    <option value="">None</option>
+                    <template x-for="wot in wots" :key="wot.id">
+                        <option :value="wot.id" x-text="wot.id + ' (' + wot.pubkey_count + ' keys, ' + wot.status.state + ')'"></option>
+                    </template>
+                </select>
             </div>
         </div>
 
@@ -514,6 +550,124 @@
         </div>
     </main>
 
+    <!-- ==================== WOT LIST VIEW ==================== -->
+    <main x-show="currentView === 'wotList'" class="max-w-4xl mx-auto px-6 py-8">
+        <div class="flex items-center justify-between mb-6">
+            <h2 class="text-lg font-semibold">Web of Trust</h2>
+            <button @click="showWotCreateForm()" class="bg-white text-gray-900 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-100 transition">
+                Create WoT
+            </button>
+        </div>
+
+        <!-- Discovery Relays -->
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 mb-6" x-data="tagInput()">
+            <h3 class="text-sm font-medium text-gray-400 mb-1">Discovery Relays</h3>
+            <p class="text-xs text-gray-500 mb-3">Relays used to crawl follow lists when building WoTs.</p>
+            <div class="flex flex-wrap gap-1.5 mb-2">
+                <template x-for="(item, index) in discoveryRelays" :key="index">
+                    <span class="bg-gray-700 text-gray-200 rounded px-2 py-1 text-xs inline-flex items-center gap-1">
+                        <span x-text="item"></span>
+                        <button @click="discoveryRelays.splice(index, 1); saveDiscoveryRelays()" class="text-gray-400 hover:text-white">&times;</button>
+                    </span>
+                </template>
+            </div>
+            <div class="flex gap-2">
+                <input type="text" placeholder="wss://relay.example.com" @keydown.enter.prevent="addDiscoveryRelay($event)"
+                    class="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+                <button type="button" @click="addDiscoveryRelay({ target: $el.previousElementSibling })" class="bg-gray-800 border border-gray-700 hover:border-gray-500 text-gray-300 hover:text-white rounded-lg px-3 py-2 text-sm transition">Add</button>
+            </div>
+        </div>
+
+        <!-- WoT Cards -->
+        <div class="grid gap-4">
+            <template x-for="wot in wots" :key="wot.id">
+                <div class="bg-gray-900 border border-gray-800 rounded-lg p-5">
+                    <div class="flex items-start justify-between mb-2">
+                        <div>
+                            <h3 class="font-semibold text-white" x-text="wot.id"></h3>
+                            <p class="text-sm text-gray-400 mt-1 font-mono" x-text="wot.config.seed.length > 20 ? wot.config.seed.slice(0, 12) + '...' + wot.config.seed.slice(-4) : wot.config.seed"></p>
+                        </div>
+                        <span class="text-xs rounded-full px-2.5 py-1 font-medium"
+                            :class="{
+                                'bg-gray-800 text-gray-400': wot.status.state === 'Pending',
+                                'bg-amber-500/10 text-amber-400': wot.status.state === 'Building',
+                                'bg-emerald-500/10 text-emerald-400': wot.status.state === 'Ready',
+                                'bg-red-500/10 text-red-400': wot.status.state === 'Error',
+                            }"
+                            x-text="wot.status.state === 'Building' ? 'Building ' + (wot.status.depth_progress || 0) + '/' + (wot.status.total_depth || '?') : wot.status.state"></span>
+                    </div>
+                    <div class="flex flex-wrap gap-3 text-xs text-gray-400 mt-3 mb-4">
+                        <span x-text="'Depth: ' + wot.config.depth"></span>
+                        <span x-text="wot.pubkey_count.toLocaleString() + ' pubkeys'"></span>
+                        <span x-text="'Refresh: ' + wot.config.update_interval_hours + 'h'"></span>
+                        <span x-show="wot.last_updated" x-text="'Updated: ' + new Date(wot.last_updated * 1000).toLocaleString()"></span>
+                    </div>
+                    <template x-if="wot.status.state === 'Error'">
+                        <p class="text-xs text-red-400 mb-3" x-text="wot.status.message"></p>
+                    </template>
+                    <div class="flex gap-3">
+                        <button @click="showWotEditForm(wot)" class="text-sm text-gray-400 hover:text-white border border-gray-700 rounded px-3 py-1.5 transition">Edit</button>
+                        <button @click="confirmDeleteWot(wot)" class="text-sm text-red-400 hover:text-red-300 px-3 py-1.5 transition">Delete</button>
+                    </div>
+                </div>
+            </template>
+        </div>
+
+        <div x-show="wots.length === 0" class="text-center text-gray-500 py-12">
+            No Web of Trust configurations. Create one to get started.
+        </div>
+    </main>
+
+    <!-- ==================== WOT FORM VIEW ==================== -->
+    <main x-show="currentView === 'wotForm'" class="max-w-2xl mx-auto px-6 py-8">
+        <button @click="currentView = 'wotList'" class="text-sm text-gray-400 hover:text-white mb-6 inline-flex items-center gap-1 transition">
+            &larr; Back to Web of Trust
+        </button>
+
+        <h2 class="text-lg font-semibold mb-6" x-text="editingWot ? 'Edit WoT' : 'Create WoT'"></h2>
+
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 mb-4">
+            <template x-if="!editingWot">
+                <div class="mb-4">
+                    <label class="block text-sm text-gray-400 mb-1">ID</label>
+                    <input type="text" x-model="wotForm.id" placeholder="e.g. my-follows"
+                        class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+                    <p class="text-xs text-gray-500 mt-1">Alphanumeric, hyphens, underscores. Referenced in relay policies.</p>
+                </div>
+            </template>
+
+            <div class="mb-4">
+                <label class="block text-sm text-gray-400 mb-1">Seed Pubkey</label>
+                <input type="text" x-model="wotForm.seed" placeholder="npub1... or hex"
+                    class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+                <p class="text-xs text-gray-500 mt-1">The starting pubkey whose follow list is crawled.</p>
+            </div>
+
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Depth</label>
+                    <input type="number" x-model.number="wotForm.depth" min="1" max="4"
+                        class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+                    <p class="text-xs text-gray-500 mt-1">1-4. Depth 2 yields ~50k pubkeys.</p>
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Update Interval (hours)</label>
+                    <input type="number" x-model.number="wotForm.update_interval_hours" min="1"
+                        class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600">
+                </div>
+            </div>
+        </div>
+
+        <!-- Error message -->
+        <div x-show="wotFormError" class="bg-red-900/50 border border-red-700 text-red-200 px-4 py-3 rounded-lg mb-4 text-sm" x-text="wotFormError"></div>
+
+        <!-- Actions -->
+        <div class="flex items-center gap-3">
+            <button @click="saveWot()" class="bg-white text-gray-900 px-5 py-2 rounded-lg text-sm font-medium hover:bg-gray-100 transition">Save</button>
+            <button @click="currentView = 'wotList'" class="text-sm text-gray-400 hover:text-white px-4 py-2 transition">Cancel</button>
+        </div>
+    </main>
+
     <!-- ==================== DELETE MODAL ==================== -->
     <div x-show="deleteTarget" class="fixed inset-0 z-50 flex items-center justify-center" x-cloak>
         <div class="absolute inset-0 bg-black/50" @click="deleteTarget = null"></div>
@@ -523,6 +677,20 @@
             <div class="flex gap-3 justify-end">
                 <button @click="deleteTarget = null" class="text-sm text-gray-400 hover:text-white px-4 py-2 transition">Cancel</button>
                 <button @click="deleteRelay()" class="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 transition">Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== DELETE WOT MODAL ==================== -->
+    <div x-show="deleteWotTarget" class="fixed inset-0 z-50 flex items-center justify-center" x-cloak>
+        <div class="absolute inset-0 bg-black/50" @click="deleteWotTarget = null"></div>
+        <div class="relative bg-gray-900 border border-gray-800 rounded-lg p-6 max-w-sm w-full mx-4">
+            <h3 class="text-lg font-semibold mb-2">Delete WoT</h3>
+            <p class="text-sm text-gray-400 mb-6">Are you sure you want to delete WoT <span class="text-white font-medium" x-text="deleteWotTarget?.id"></span>?</p>
+            <div x-show="deleteWotError" class="bg-red-900/50 border border-red-700 text-red-200 px-3 py-2 rounded mb-4 text-sm" x-text="deleteWotError"></div>
+            <div class="flex gap-3 justify-end">
+                <button @click="deleteWotTarget = null; deleteWotError = ''" class="text-sm text-gray-400 hover:text-white px-4 py-2 transition">Cancel</button>
+                <button @click="deleteWot()" class="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 transition">Delete</button>
             </div>
         </div>
     </div>
@@ -558,6 +726,13 @@
                 selectedPreset: null,
                 simpleFormPubkeys: [],
                 statusInfo: { domain: 'localhost', port: 8080 },
+                wots: [],
+                discoveryRelays: [],
+                editingWot: null,
+                deleteWotTarget: null,
+                deleteWotError: '',
+                wotFormError: '',
+                wotForm: { id: '', seed: '', depth: 1, update_interval_hours: 24 },
                 form: {
                     id: '',
                     name: '',
@@ -578,6 +753,8 @@
                     writes_per_minute: '',
                     reads_per_minute: '',
                     page_html: '',
+                    write_wot: '',
+                    read_wot: '',
                 },
 
                 emptyForm() {
@@ -601,6 +778,8 @@
                         writes_per_minute: '',
                         reads_per_minute: '',
                         page_html: '',
+                        write_wot: '',
+                        read_wot: '',
                     };
                 },
 
@@ -721,6 +900,8 @@
                 async init() {
                     await this.fetchStatus();
                     await this.fetchRelays();
+                    await this.fetchWots();
+                    await this.fetchDiscoveryRelays();
                 },
 
                 async fetchStatus() {
@@ -755,6 +936,7 @@
                 async showEditForm(relay) {
                     this.editingRelay = relay;
                     this.formError = '';
+                    await this.fetchWots();
                     const p = relay.policy || {};
                     const w = p.write || {};
                     const r = p.read || {};
@@ -780,6 +962,8 @@
                         writes_per_minute: rl.writes_per_minute ?? '',
                         reads_per_minute: rl.reads_per_minute ?? '',
                         page_html: '',
+                        write_wot: w.wot || '',
+                        read_wot: r.wot || '',
                     };
                     try {
                         const res = await fetch(`/api/relays/${relay.id}/page`);
@@ -803,10 +987,12 @@
                                 allowed_pubkeys: this.form.write_allowed_pubkeys.length ? this.form.write_allowed_pubkeys : null,
                                 blocked_pubkeys: this.form.write_blocked_pubkeys.length ? this.form.write_blocked_pubkeys : null,
                                 tagged_pubkeys: this.form.write_tagged_pubkeys.length ? this.form.write_tagged_pubkeys : null,
+                                wot: this.form.write_wot || null,
                             },
                             read: {
                                 require_auth: this.form.read_require_auth,
                                 allowed_pubkeys: this.form.read_allowed_pubkeys.length ? this.form.read_allowed_pubkeys : null,
+                                wot: this.form.read_wot || null,
                             },
                             events: {
                                 allowed_kinds: this.form.allowed_kinds.length ? this.form.allowed_kinds : null,
@@ -905,6 +1091,123 @@
                     if (!this.editingRelay) return;
                     await fetch(`/api/relays/${this.editingRelay.id}/page`, { method: 'DELETE' });
                     this.form.page_html = '';
+                },
+
+                // ---- WoT CRUD ----
+
+                async fetchWots() {
+                    try {
+                        const res = await fetch('/api/wots');
+                        if (res.ok) {
+                            this.wots = await res.json();
+                        }
+                    } catch (e) { console.error('Failed to fetch WoTs', e); }
+                },
+
+                async fetchDiscoveryRelays() {
+                    try {
+                        const res = await fetch('/api/discovery-relays');
+                        if (res.ok) {
+                            this.discoveryRelays = await res.json();
+                        }
+                    } catch (e) { console.error('Failed to fetch discovery relays', e); }
+                },
+
+                addDiscoveryRelay(event) {
+                    const val = event.target.value.trim();
+                    if (val && !this.discoveryRelays.includes(val)) {
+                        this.discoveryRelays.push(val);
+                        this.saveDiscoveryRelays();
+                    }
+                    event.target.value = '';
+                },
+
+                async saveDiscoveryRelays() {
+                    try {
+                        await fetch('/api/discovery-relays', {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ relays: this.discoveryRelays }),
+                        });
+                    } catch (e) { console.error('Failed to save discovery relays', e); }
+                },
+
+                showWotCreateForm() {
+                    this.editingWot = null;
+                    this.wotForm = { id: '', seed: '', depth: 1, update_interval_hours: 24 };
+                    this.wotFormError = '';
+                    this.currentView = 'wotForm';
+                },
+
+                showWotEditForm(wot) {
+                    this.editingWot = wot;
+                    this.wotForm = {
+                        id: wot.id,
+                        seed: wot.config.seed,
+                        depth: wot.config.depth,
+                        update_interval_hours: wot.config.update_interval_hours,
+                    };
+                    this.wotFormError = '';
+                    this.currentView = 'wotForm';
+                },
+
+                async saveWot() {
+                    this.wotFormError = '';
+                    try {
+                        let res;
+                        if (this.editingWot) {
+                            res = await fetch(`/api/wots/${this.editingWot.id}`, {
+                                method: 'PUT',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    seed: this.wotForm.seed,
+                                    depth: this.wotForm.depth,
+                                    update_interval_hours: this.wotForm.update_interval_hours,
+                                }),
+                            });
+                        } else {
+                            res = await fetch('/api/wots', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(this.wotForm),
+                            });
+                        }
+                        if (res.ok || res.status === 201) {
+                            await this.fetchWots();
+                            await this.fetchStatus();
+                            this.currentView = 'wotList';
+                        } else if (res.status === 401) {
+                            window.location.href = '/';
+                        } else {
+                            this.wotFormError = await res.text();
+                        }
+                    } catch (e) {
+                        this.wotFormError = 'Network error: ' + e.message;
+                    }
+                },
+
+                confirmDeleteWot(wot) {
+                    this.deleteWotTarget = wot;
+                    this.deleteWotError = '';
+                },
+
+                async deleteWot() {
+                    if (!this.deleteWotTarget) return;
+                    try {
+                        const res = await fetch(`/api/wots/${this.deleteWotTarget.id}`, { method: 'DELETE' });
+                        if (res.ok || res.status === 204) {
+                            this.deleteWotTarget = null;
+                            this.deleteWotError = '';
+                            await this.fetchWots();
+                            await this.fetchStatus();
+                        } else if (res.status === 401) {
+                            window.location.href = '/';
+                        } else {
+                            this.deleteWotError = await res.text();
+                        }
+                    } catch (e) {
+                        this.deleteWotError = 'Network error: ' + e.message;
+                    }
                 },
 
                 async logout() {

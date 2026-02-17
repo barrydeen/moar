@@ -1,8 +1,9 @@
 use crate::auth::verify_auth_event;
-use crate::config::{MoarConfig, RelayConfig};
+use crate::config::{MoarConfig, RelayConfig, WotConfig};
 use crate::policy::PolicyEngine;
 use crate::server::{self, RelayState};
 use crate::storage::NostrStore;
+use crate::wot::WotManager;
 use axum::{
     body::Body,
     extract::{Host, Path, Request, State},
@@ -30,6 +31,7 @@ pub struct GatewayState {
     pub pages_dir: PathBuf,
     pub pending_restart: Arc<RwLock<bool>>,
     pub sessions: Arc<RwLock<HashMap<String, SessionInfo>>>,
+    pub wot_manager: Arc<WotManager>,
 }
 
 #[derive(Clone, Debug)]
@@ -54,6 +56,7 @@ pub async fn start_gateway(
     relays: HashMap<String, (RelayConfig, Arc<dyn NostrStore>, Arc<PolicyEngine>)>,
     config: MoarConfig,
     config_path: PathBuf,
+    wot_manager: Arc<WotManager>,
 ) -> crate::error::Result<()> {
     let pages_dir = PathBuf::from(&config.pages_dir);
     // Ensure the pages directory exists
@@ -85,6 +88,7 @@ pub async fn start_gateway(
         pages_dir,
         pending_restart: Arc::new(RwLock::new(false)),
         sessions: Arc::new(RwLock::new(HashMap::new())),
+        wot_manager,
     });
 
     let app = Router::new().fallback(handler).with_state(state);
@@ -162,6 +166,15 @@ pub fn admin_router() -> Router<Arc<GatewayState>> {
         .route(
             "/api/relays/:id/page",
             get(get_relay_page).put(put_relay_page).delete(delete_relay_page),
+        )
+        .route("/api/wots", get(list_wots).post(create_wot))
+        .route(
+            "/api/wots/:id",
+            get(get_wot).put(update_wot).delete(delete_wot),
+        )
+        .route(
+            "/api/discovery-relays",
+            get(get_discovery_relays).put(put_discovery_relays),
         )
 }
 
@@ -623,4 +636,256 @@ async fn delete_relay_page(
     let _ = tokio::fs::remove_file(&page_path).await;
 
     StatusCode::NO_CONTENT.into_response()
+}
+
+// --- WoT Handlers ---
+
+async fn list_wots(
+    State(state): State<Arc<GatewayState>>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    let wots = state.wot_manager.list_wots().await;
+    Json(wots).into_response()
+}
+
+async fn get_wot(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    let wots = state.wot_manager.list_wots().await;
+    match wots.into_iter().find(|w| w.id == id) {
+        Some(wot) => Json(wot).into_response(),
+        None => (StatusCode::NOT_FOUND, "WoT not found").into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct CreateWotRequest {
+    id: String,
+    seed: String,
+    #[serde(default = "default_depth")]
+    depth: u8,
+    #[serde(default = "default_interval")]
+    update_interval_hours: u64,
+}
+
+fn default_depth() -> u8 { 1 }
+fn default_interval() -> u64 { 24 }
+
+async fn create_wot(
+    State(state): State<Arc<GatewayState>>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    let body = match axum::body::to_bytes(request.into_body(), 1024 * 64).await {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid body").into_response(),
+    };
+
+    let payload: CreateWotRequest = match serde_json::from_slice(&body) {
+        Ok(p) => p,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, format!("Invalid JSON: {}", e)).into_response()
+        }
+    };
+
+    if let Err(e) = validate_relay_id(&payload.id) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
+
+    if payload.depth < 1 || payload.depth > 4 {
+        return (StatusCode::BAD_REQUEST, "Depth must be 1-4").into_response();
+    }
+
+    // Validate seed is a valid pubkey
+    if nostr::PublicKey::parse(&payload.seed).is_err() {
+        return (StatusCode::BAD_REQUEST, "Invalid seed pubkey").into_response();
+    }
+
+    let wot_config = WotConfig {
+        seed: payload.seed,
+        depth: payload.depth,
+        update_interval_hours: payload.update_interval_hours,
+    };
+
+    if let Err(e) = state.wot_manager.add_wot(payload.id.clone(), wot_config.clone()).await {
+        return (StatusCode::CONFLICT, e).into_response();
+    }
+
+    // Save to config
+    let mut config = state.config.write().await;
+    config.wots.insert(payload.id.clone(), wot_config);
+    if let Err(resp) = save_config(&state, &config).await {
+        return resp;
+    }
+
+    (StatusCode::CREATED, "WoT created").into_response()
+}
+
+#[derive(Deserialize)]
+struct UpdateWotRequest {
+    seed: String,
+    #[serde(default = "default_depth")]
+    depth: u8,
+    #[serde(default = "default_interval")]
+    update_interval_hours: u64,
+}
+
+async fn update_wot(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    let body = match axum::body::to_bytes(request.into_body(), 1024 * 64).await {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid body").into_response(),
+    };
+
+    let payload: UpdateWotRequest = match serde_json::from_slice(&body) {
+        Ok(p) => p,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, format!("Invalid JSON: {}", e)).into_response()
+        }
+    };
+
+    if payload.depth < 1 || payload.depth > 4 {
+        return (StatusCode::BAD_REQUEST, "Depth must be 1-4").into_response();
+    }
+
+    if nostr::PublicKey::parse(&payload.seed).is_err() {
+        return (StatusCode::BAD_REQUEST, "Invalid seed pubkey").into_response();
+    }
+
+    let wot_config = WotConfig {
+        seed: payload.seed,
+        depth: payload.depth,
+        update_interval_hours: payload.update_interval_hours,
+    };
+
+    if let Err(e) = state.wot_manager.update_wot(&id, wot_config.clone()).await {
+        return (StatusCode::NOT_FOUND, e).into_response();
+    }
+
+    let mut config = state.config.write().await;
+    config.wots.insert(id, wot_config);
+    if let Err(resp) = save_config(&state, &config).await {
+        return resp;
+    }
+
+    (StatusCode::OK, "WoT updated").into_response()
+}
+
+async fn delete_wot(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    // Check if any relay policies reference this WoT
+    let config = state.config.read().await;
+    let mut referencing_relays = Vec::new();
+    for (relay_id, relay_conf) in &config.relays {
+        if relay_conf.policy.write.wot.as_deref() == Some(&id)
+            || relay_conf.policy.read.wot.as_deref() == Some(&id)
+        {
+            referencing_relays.push(relay_id.clone());
+        }
+    }
+    drop(config);
+
+    if !referencing_relays.is_empty() {
+        return (
+            StatusCode::CONFLICT,
+            format!(
+                "WoT '{}' is referenced by relay policies: {}. Remove the WoT references first.",
+                id,
+                referencing_relays.join(", ")
+            ),
+        )
+            .into_response();
+    }
+
+    if let Err(e) = state.wot_manager.remove_wot(&id).await {
+        return (StatusCode::NOT_FOUND, e).into_response();
+    }
+
+    let mut config = state.config.write().await;
+    config.wots.remove(&id);
+    if let Err(resp) = save_config(&state, &config).await {
+        return resp;
+    }
+
+    StatusCode::NO_CONTENT.into_response()
+}
+
+// --- Discovery Relay Handlers ---
+
+async fn get_discovery_relays(
+    State(state): State<Arc<GatewayState>>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    let relays = state.wot_manager.get_discovery_relays().await;
+    Json(relays).into_response()
+}
+
+#[derive(Deserialize)]
+struct DiscoveryRelaysPayload {
+    relays: Vec<String>,
+}
+
+async fn put_discovery_relays(
+    State(state): State<Arc<GatewayState>>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    let body = match axum::body::to_bytes(request.into_body(), 1024 * 64).await {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid body").into_response(),
+    };
+
+    let payload: DiscoveryRelaysPayload = match serde_json::from_slice(&body) {
+        Ok(p) => p,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, format!("Invalid JSON: {}", e)).into_response()
+        }
+    };
+
+    state
+        .wot_manager
+        .set_discovery_relays(payload.relays.clone())
+        .await;
+
+    let mut config = state.config.write().await;
+    config.discovery_relays = payload.relays;
+    if let Err(resp) = save_config(&state, &config).await {
+        return resp;
+    }
+
+    (StatusCode::OK, "Discovery relays updated").into_response()
 }

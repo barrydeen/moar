@@ -5,3 +5,4 @@ pub mod gateway;
 pub mod policy;
 pub mod server;
 pub mod storage;
+pub mod wot;
