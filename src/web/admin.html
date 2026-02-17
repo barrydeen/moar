@@ -501,7 +501,7 @@
                         }
 
                         if (res.ok) {
-                            // Save custom page if editing
+                            // Save or delete custom page
                             const relayId = this.editingRelay ? this.editingRelay.id : this.form.id;
                             if (this.form.page_html) {
                                 await fetch(`/api/relays/${relayId}/page`, {
@@ -509,6 +509,9 @@
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify({ html: this.form.page_html }),
                                 });
+                            } else if (this.editingRelay) {
+                                // Page was cleared — delete the file
+                                await fetch(`/api/relays/${relayId}/page`, { method: 'DELETE' });
                             }
                             await this.fetchRelays();
                             await this.fetchStatus();

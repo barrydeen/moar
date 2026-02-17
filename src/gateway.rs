@@ -510,6 +510,10 @@ async fn delete_relay(
         return resp;
     }
 
+    // Clean up custom page file if it exists
+    let page_path = state.pages_dir.join(format!("{}.html", id));
+    let _ = tokio::fs::remove_file(&page_path).await;
+
     StatusCode::NO_CONTENT.into_response()
 }
 
