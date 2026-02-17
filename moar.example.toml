@@ -73,3 +73,21 @@ allowed_pubkeys = ["npub1..."]
 require_auth = false
 
 [relays.outbox.policy.events]
+
+# ===== Blossom Media Servers =====
+
+# Media Server - Public media storage
+[blossoms.media]
+name = "Media Server"
+description = "Public media storage"
+subdomain = "media"
+storage_path = "data/blossom/media"
+
+[blossoms.media.policy]
+max_file_size = 104857600  # 100MB
+
+[blossoms.media.policy.upload]
+allowed_pubkeys = ["your-hex-pubkey-here"]
+
+[blossoms.media.policy.list]
+require_auth = false

@@ -17,6 +17,8 @@ pub struct MoarConfig {
     #[serde(default)]
     pub wots: HashMap<String, WotConfig>,
     pub relays: HashMap<String, RelayConfig>,
+    #[serde(default)]
+    pub blossoms: HashMap<String, BlossomConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -143,4 +145,39 @@ impl Default for EventPolicy {
 pub struct RateLimitConfig {
     pub writes_per_minute: Option<u32>,
     pub reads_per_minute: Option<u32>,
+}
+
+// ---------------------------------------------------------------------------
+// Blossom (media server) configuration
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlossomConfig {
+    pub name: String,
+    pub description: Option<String>,
+    pub subdomain: String,
+    pub storage_path: String,
+    #[serde(default)]
+    pub policy: BlossomPolicyConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BlossomPolicyConfig {
+    #[serde(default)]
+    pub upload: BlossomUploadPolicy,
+    #[serde(default)]
+    pub list: BlossomListPolicy,
+    pub max_file_size: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BlossomUploadPolicy {
+    pub allowed_pubkeys: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BlossomListPolicy {
+    #[serde(default)]
+    pub require_auth: bool,
+    pub allowed_pubkeys: Option<Vec<String>>,
 }

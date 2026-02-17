@@ -1,18 +1,21 @@
 use crate::auth::verify_auth_event;
-use crate::config::{MoarConfig, RelayConfig, WotConfig};
+use crate::blossom::handlers::{self as blossom_handlers, BlossomState};
+use crate::blossom::store::BlobStore;
+use crate::config::{BlossomConfig, MoarConfig, RelayConfig, WotConfig};
 use crate::policy::PolicyEngine;
 use crate::server::{self, RelayState};
 use crate::storage::NostrStore;
 use crate::wot::WotManager;
 use axum::{
     body::Body,
-    extract::{Host, Path, Request, State},
+    extract::{FromRequest, Host, Path, Request, State},
     http::{header, StatusCode, Uri},
     response::{Html, IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete as delete_route, get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -26,6 +29,8 @@ pub struct GatewayState {
     pub port: u16,
     pub relay_routers: HashMap<String, Router>,
     pub relay_configs: HashMap<String, RelayConfig>,
+    pub blossom_routers: HashMap<String, Router>,
+    pub blossom_stores: HashMap<String, Arc<BlobStore>>,
     pub config: Arc<RwLock<MoarConfig>>,
     pub config_path: PathBuf,
     pub pages_dir: PathBuf,
@@ -54,6 +59,7 @@ pub async fn start_gateway(
     port: u16,
     domain: String,
     relays: HashMap<String, (RelayConfig, Arc<dyn NostrStore>, Arc<PolicyEngine>)>,
+    blossoms: HashMap<String, (BlossomConfig, Arc<BlobStore>)>,
     config: MoarConfig,
     config_path: PathBuf,
     wot_manager: Arc<WotManager>,
@@ -78,11 +84,33 @@ pub async fn start_gateway(
         config_map.insert(relay_config.subdomain.clone(), relay_config);
     }
 
+    let mut blossom_router_map = HashMap::new();
+    let mut blossom_store_map = HashMap::new();
+
+    for (key, (blossom_config, store)) in blossoms {
+        let scheme = if domain == "localhost" { "http" } else { "https" };
+        let base_url = format!(
+            "{}://{}.{}:{}",
+            scheme, blossom_config.subdomain, domain, port
+        );
+        let blossom_state = BlossomState {
+            config: blossom_config.clone(),
+            store: store.clone(),
+            server_id: key.clone(),
+            base_url,
+        };
+        let app = blossom_handlers::create_blossom_router(blossom_state);
+        blossom_router_map.insert(blossom_config.subdomain.clone(), app);
+        blossom_store_map.insert(key, store);
+    }
+
     let state = Arc::new(GatewayState {
         domain: domain.clone(),
         port,
         relay_routers: router_map,
         relay_configs: config_map,
+        blossom_routers: blossom_router_map,
+        blossom_stores: blossom_store_map,
         config: Arc::new(RwLock::new(config)),
         config_path,
         pages_dir,
@@ -140,11 +168,21 @@ async fn handler(
                 }
             }
         }
+
+        if let Some(router) = state.blossom_routers.get(sub) {
+            let router = router.clone();
+            match router.oneshot(request).await {
+                Ok(res) => return res,
+                Err(_) => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "Router error").into_response();
+                }
+            }
+        }
     }
 
     (
         StatusCode::NOT_FOUND,
-        format!("Relay not found for host: {}", hostname),
+        format!("Service not found for host: {}", hostname),
     )
         .into_response()
 }
@@ -176,6 +214,15 @@ pub fn admin_router() -> Router<Arc<GatewayState>> {
             "/api/discovery-relays",
             get(get_discovery_relays).put(put_discovery_relays),
         )
+        .route("/api/blossoms", get(list_blossoms).post(create_blossom))
+        .route(
+            "/api/blossoms/:id",
+            get(get_blossom)
+                .put(update_blossom)
+                .delete(delete_blossom),
+        )
+        .route("/api/blossoms/:id/media", get(list_blossom_media).post(upload_blossom_media))
+        .route("/api/blossoms/:id/media/:sha256", delete_route(delete_blossom_media))
 }
 
 async fn serve_index() -> impl IntoResponse {
@@ -350,6 +397,7 @@ fn validate_relay_id(id: &str) -> Result<(), String> {
 fn validate_relay_config(
     config: &RelayConfig,
     existing_relays: &HashMap<String, RelayConfig>,
+    existing_blossoms: &HashMap<String, BlossomConfig>,
     exclude_id: Option<&str>,
 ) -> Result<(), String> {
     if config.name.is_empty() {
@@ -358,7 +406,7 @@ fn validate_relay_config(
     if config.subdomain.is_empty() {
         return Err("Subdomain cannot be empty".to_string());
     }
-    // Check subdomain uniqueness
+    // Check subdomain uniqueness across relays and blossoms
     for (id, existing) in existing_relays {
         if Some(id.as_str()) == exclude_id {
             continue;
@@ -366,6 +414,14 @@ fn validate_relay_config(
         if existing.subdomain == config.subdomain {
             return Err(format!(
                 "Subdomain '{}' is already used by relay '{}'",
+                config.subdomain, id
+            ));
+        }
+    }
+    for (id, existing) in existing_blossoms {
+        if existing.subdomain == config.subdomain {
+            return Err(format!(
+                "Subdomain '{}' is already used by blossom server '{}'",
                 config.subdomain, id
             ));
         }
@@ -437,7 +493,7 @@ async fn create_relay(
             .into_response();
     }
 
-    if let Err(e) = validate_relay_config(&payload.config, &config.relays, None) {
+    if let Err(e) = validate_relay_config(&payload.config, &config.relays, &config.blossoms, None) {
         return (StatusCode::BAD_REQUEST, e).into_response();
     }
 
@@ -486,7 +542,7 @@ async fn update_relay(
         return (StatusCode::NOT_FOUND, "Relay not found").into_response();
     }
 
-    if let Err(e) = validate_relay_config(&new_config, &config.relays, Some(&id)) {
+    if let Err(e) = validate_relay_config(&new_config, &config.relays, &config.blossoms, Some(&id)) {
         return (StatusCode::BAD_REQUEST, e).into_response();
     }
 
@@ -888,4 +944,376 @@ async fn put_discovery_relays(
     }
 
     (StatusCode::OK, "Discovery relays updated").into_response()
+}
+
+// --- Blossom Handlers ---
+
+#[derive(Serialize)]
+struct BlossomResponse {
+    id: String,
+    #[serde(flatten)]
+    config: BlossomConfig,
+}
+
+async fn list_blossoms(State(state): State<Arc<GatewayState>>) -> impl IntoResponse {
+    let config = state.config.read().await;
+    let blossoms: Vec<BlossomResponse> = config
+        .blossoms
+        .iter()
+        .map(|(id, cfg)| BlossomResponse {
+            id: id.clone(),
+            config: cfg.clone(),
+        })
+        .collect();
+    Json(blossoms)
+}
+
+async fn get_blossom(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let config = state.config.read().await;
+    match config.blossoms.get(&id) {
+        Some(cfg) => Json(BlossomResponse {
+            id: id.clone(),
+            config: cfg.clone(),
+        })
+        .into_response(),
+        None => (StatusCode::NOT_FOUND, "Blossom server not found").into_response(),
+    }
+}
+
+fn validate_blossom_config(
+    config: &BlossomConfig,
+    existing_blossoms: &HashMap<String, BlossomConfig>,
+    existing_relays: &HashMap<String, RelayConfig>,
+    exclude_id: Option<&str>,
+) -> Result<(), String> {
+    if config.name.is_empty() {
+        return Err("Name cannot be empty".to_string());
+    }
+    if config.subdomain.is_empty() {
+        return Err("Subdomain cannot be empty".to_string());
+    }
+    if config.storage_path.is_empty() {
+        return Err("Storage path cannot be empty".to_string());
+    }
+    // Check subdomain uniqueness across both blossoms and relays
+    for (id, existing) in existing_blossoms {
+        if Some(id.as_str()) == exclude_id {
+            continue;
+        }
+        if existing.subdomain == config.subdomain {
+            return Err(format!(
+                "Subdomain '{}' is already used by blossom server '{}'",
+                config.subdomain, id
+            ));
+        }
+    }
+    for (id, existing) in existing_relays {
+        if existing.subdomain == config.subdomain {
+            return Err(format!(
+                "Subdomain '{}' is already used by relay '{}'",
+                config.subdomain, id
+            ));
+        }
+    }
+    Ok(())
+}
+
+async fn create_blossom(
+    State(state): State<Arc<GatewayState>>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    let body = match axum::body::to_bytes(request.into_body(), 1024 * 64).await {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid body").into_response(),
+    };
+
+    #[derive(Deserialize)]
+    struct CreateBlossomRequest {
+        id: String,
+        #[serde(flatten)]
+        config: BlossomConfig,
+    }
+
+    let payload: CreateBlossomRequest = match serde_json::from_slice(&body) {
+        Ok(p) => p,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, format!("Invalid JSON: {}", e)).into_response()
+        }
+    };
+
+    if let Err(e) = validate_relay_id(&payload.id) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
+
+    let mut config = state.config.write().await;
+
+    if config.blossoms.contains_key(&payload.id) {
+        return (
+            StatusCode::CONFLICT,
+            format!("Blossom server '{}' already exists", payload.id),
+        )
+            .into_response();
+    }
+
+    if let Err(e) = validate_blossom_config(&payload.config, &config.blossoms, &config.relays, None) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
+
+    config
+        .blossoms
+        .insert(payload.id.clone(), payload.config.clone());
+
+    if let Err(resp) = save_config(&state, &config).await {
+        config.blossoms.remove(&payload.id);
+        return resp;
+    }
+
+    (
+        StatusCode::CREATED,
+        Json(BlossomResponse {
+            id: payload.id,
+            config: payload.config,
+        }),
+    )
+        .into_response()
+}
+
+async fn update_blossom(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    let body = match axum::body::to_bytes(request.into_body(), 1024 * 64).await {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid body").into_response(),
+    };
+
+    let new_config: BlossomConfig = match serde_json::from_slice(&body) {
+        Ok(p) => p,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, format!("Invalid JSON: {}", e)).into_response()
+        }
+    };
+
+    let mut config = state.config.write().await;
+
+    if !config.blossoms.contains_key(&id) {
+        return (StatusCode::NOT_FOUND, "Blossom server not found").into_response();
+    }
+
+    if let Err(e) = validate_blossom_config(&new_config, &config.blossoms, &config.relays, Some(&id)) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
+
+    let old_config = config.blossoms.insert(id.clone(), new_config.clone());
+
+    if let Err(resp) = save_config(&state, &config).await {
+        if let Some(old) = old_config {
+            config.blossoms.insert(id.clone(), old);
+        }
+        return resp;
+    }
+
+    Json(BlossomResponse {
+        id,
+        config: new_config,
+    })
+    .into_response()
+}
+
+async fn delete_blossom(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    let mut config = state.config.write().await;
+
+    let removed = config.blossoms.remove(&id);
+    if removed.is_none() {
+        return (StatusCode::NOT_FOUND, "Blossom server not found").into_response();
+    }
+
+    if let Err(resp) = save_config(&state, &config).await {
+        if let Some(old) = removed {
+            config.blossoms.insert(id, old);
+        }
+        return resp;
+    }
+
+    StatusCode::NO_CONTENT.into_response()
+}
+
+// --- Blossom Media Handlers (Admin) ---
+
+async fn list_blossom_media(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    let store = match state.blossom_stores.get(&id) {
+        Some(s) => s.clone(),
+        None => return (StatusCode::NOT_FOUND, "Blossom server not found").into_response(),
+    };
+
+    match store.list_all() {
+        Ok(metas) => {
+            let config = state.config.read().await;
+            let base_url = match config.blossoms.get(&id) {
+                Some(cfg) => {
+                    let scheme = if state.domain == "localhost" {
+                        "http"
+                    } else {
+                        "https"
+                    };
+                    format!("{}://{}.{}:{}", scheme, cfg.subdomain, state.domain, state.port)
+                }
+                None => String::new(),
+            };
+            drop(config);
+
+            let descriptors: Vec<blossom_handlers::BlobDescriptor> = metas
+                .iter()
+                .map(|m| blossom_handlers::BlobDescriptor::from_meta(m, &base_url))
+                .collect();
+            Json(descriptors).into_response()
+        }
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Storage error").into_response(),
+    }
+}
+
+async fn upload_blossom_media(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    let store = match state.blossom_stores.get(&id) {
+        Some(s) => s.clone(),
+        None => return (StatusCode::NOT_FOUND, "Blossom server not found").into_response(),
+    };
+
+    let admin_pubkey = {
+        let config = state.config.read().await;
+        config.admin_pubkey.clone()
+    };
+
+    // Parse content type and get filename from Content-Disposition or Content-Type header
+    let content_type_header = request
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    if !content_type_header.contains("multipart/form-data") {
+        return (StatusCode::BAD_REQUEST, "Expected multipart form data").into_response();
+    }
+
+    let mut multipart = match axum::extract::Multipart::from_request(request, &()).await {
+        Ok(m) => m,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Failed to parse multipart").into_response(),
+    };
+
+    let field = match multipart.next_field().await {
+        Ok(Some(f)) => f,
+        Ok(None) => return (StatusCode::BAD_REQUEST, "No file field found").into_response(),
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid multipart data").into_response(),
+    };
+
+    let content_type = field
+        .content_type()
+        .unwrap_or("application/octet-stream")
+        .to_string();
+
+    let file_name = field.file_name().unwrap_or("unknown").to_string();
+
+    let data = match field.bytes().await {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Failed to read file data").into_response(),
+    };
+
+    // Compute SHA-256
+    let mut hasher = Sha256::new();
+    hasher.update(&data);
+    let hash = hasher.finalize();
+    let sha256: String = hash.iter().map(|b| format!("{:02x}", b)).collect();
+
+    // Use mime from content type, or guess from filename
+    let mime = if content_type == "application/octet-stream" {
+        mime_guess::from_path(&file_name)
+            .first_raw()
+            .unwrap_or("application/octet-stream")
+            .to_string()
+    } else {
+        content_type
+    };
+
+    match store.save_blob(&sha256, &data, &mime, &admin_pubkey) {
+        Ok(meta) => {
+            let config = state.config.read().await;
+            let base_url = match config.blossoms.get(&id) {
+                Some(cfg) => {
+                    let scheme = if state.domain == "localhost" {
+                        "http"
+                    } else {
+                        "https"
+                    };
+                    format!("{}://{}.{}:{}", scheme, cfg.subdomain, state.domain, state.port)
+                }
+                None => String::new(),
+            };
+            drop(config);
+
+            Json(blossom_handlers::BlobDescriptor::from_meta(&meta, &base_url))
+            .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to save: {}", e),
+        )
+            .into_response(),
+    }
+}
+
+async fn delete_blossom_media(
+    State(state): State<Arc<GatewayState>>,
+    Path((id, sha256)): Path<(String, String)>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    let store = match state.blossom_stores.get(&id) {
+        Some(s) => s.clone(),
+        None => return (StatusCode::NOT_FOUND, "Blossom server not found").into_response(),
+    };
+
+    match store.delete_blob(&sha256) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "Blob not found").into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Delete failed").into_response(),
+    }
 }
