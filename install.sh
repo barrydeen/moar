@@ -74,7 +74,7 @@ EOF
     echo "  MOAR is running!"
     echo "==============================="
     echo ""
-    echo "  Admin:  https://${MOAR_DOMAIN}/admin"
+    echo "  Admin:  https://${MOAR_DOMAIN}:8888"
     echo "  Outbox: wss://outbox.${MOAR_DOMAIN}/"
     echo "  Inbox:  wss://inbox.${MOAR_DOMAIN}/"
     echo "  DMs:    wss://dm.${MOAR_DOMAIN}/"
@@ -82,7 +82,7 @@ EOF
     echo ""
     echo "Make sure your DNS has an A record for"
     echo "  ${MOAR_DOMAIN} and *.${MOAR_DOMAIN}"
-    echo "pointing to this server, and ports 80+443 are open."
+    echo "pointing to this server, and ports 80, 443, and 8888 are open."
     echo ""
     echo "Logs: docker compose logs -f"
     exit 0
@@ -112,8 +112,20 @@ else
 fi
 
 echo ""
-echo "Building (this may take a few minutes)..."
+echo "Building Rust binary (this may take a few minutes)..."
 cargo build --release
+
+# Build admin panel
+if command -v node &>/dev/null && command -v npm &>/dev/null; then
+    echo ""
+    echo "Building admin panel..."
+    cd admin && npm ci && npm run build
+    cd "$INSTALL_DIR"
+else
+    echo ""
+    echo "Node.js not found — skipping admin panel build."
+    echo "Install Node.js 20+ and run: cd admin && npm ci && npm run build"
+fi
 
 # Generate config if it doesn't exist
 if [ ! -f moar.toml ]; then
