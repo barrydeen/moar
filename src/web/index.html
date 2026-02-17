@@ -58,7 +58,9 @@
                 });
 
                 if (res.ok) {
-                    window.location.href = '/admin';
+                    app.error = '';
+                    document.querySelector('button').textContent = 'Logged in ✓';
+                    document.querySelector('button').disabled = true;
                 } else {
                     app.error = 'Login failed: ' + await res.text();
                 }
