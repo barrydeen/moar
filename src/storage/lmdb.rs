@@ -386,6 +386,18 @@ impl NostrStore for LmdbStore {
         Ok(deleted)
     }
 
+    fn iter_all(&self) -> Result<Vec<Event>> {
+        let rtxn = self.env.read_txn()?;
+        let mut events = Vec::new();
+        let iter = self.events_db.iter(&rtxn)?;
+        for result in iter {
+            let (_key, raw) = result?;
+            let event = Self::decode_event(raw)?;
+            events.push(event);
+        }
+        Ok(events)
+    }
+
     fn query(&self, filter: &Filter) -> Result<Vec<Event>> {
         let rtxn = self.env.read_txn()?;
         let limit = filter.limit.unwrap_or(100);

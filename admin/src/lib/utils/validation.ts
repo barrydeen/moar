@@ -68,6 +68,66 @@ export const relayFormSchema = z.object({
 
 export type RelayFormData = z.infer<typeof relayFormSchema>;
 
+export const relaySettingsSchema = z.object({
+  name: z.string().min(1, "Name is required"),
+  description: z.string().optional(),
+  subdomain: subdomainSchema,
+  db_path: z.string().min(1, "Database path is required"),
+});
+
+export type RelaySettingsData = z.infer<typeof relaySettingsSchema>;
+
+export const relayPoliciesSchema = z.object({
+  policy: z.object({
+    write: z.object({
+      require_auth: z.boolean(),
+      allowed_pubkeys: pubkeyListSchema,
+      blocked_pubkeys: pubkeyListSchema,
+      tagged_pubkeys: pubkeyListSchema,
+      wot: z.string().nullable().optional(),
+    }),
+    read: z.object({
+      require_auth: z.boolean(),
+      allowed_pubkeys: pubkeyListSchema,
+      wot: z.string().nullable().optional(),
+    }),
+    events: z.object({
+      allowed_kinds: kindListSchema,
+      blocked_kinds: kindListSchema,
+      min_pow: z.coerce.number().int().min(0).nullable().optional(),
+      max_content_length: z.coerce.number().int().min(0).nullable().optional(),
+    }),
+    rate_limit: z
+      .object({
+        writes_per_minute: z.coerce.number().int().min(1).nullable().optional(),
+        reads_per_minute: z.coerce.number().int().min(1).nullable().optional(),
+      })
+      .nullable()
+      .optional(),
+  }),
+});
+
+export type RelayPoliciesData = z.infer<typeof relayPoliciesSchema>;
+
+export const relayNip11Schema = z.object({
+  nip11: z.object({
+    icon: z.string().url("Must be a valid URL").or(z.literal("")).optional(),
+    banner: z.string().url("Must be a valid URL").or(z.literal("")).optional(),
+    contact: z.string().optional(),
+    terms_of_service: z.string().url("Must be a valid URL").or(z.literal("")).optional(),
+    max_message_length: z.coerce.number().int().min(0).nullable().optional(),
+    max_subscriptions: z.coerce.number().int().min(0).nullable().optional(),
+    max_subid_length: z.coerce.number().int().min(0).nullable().optional(),
+    max_limit: z.coerce.number().int().min(0).nullable().optional(),
+    max_event_tags: z.coerce.number().int().min(0).nullable().optional(),
+    default_limit: z.coerce.number().int().min(0).nullable().optional(),
+    created_at_lower_limit: z.coerce.number().int().min(0).nullable().optional(),
+    created_at_upper_limit: z.coerce.number().int().min(0).nullable().optional(),
+  }),
+});
+
+export type RelayNip11Data = z.infer<typeof relayNip11Schema>;
+
 export const blossomFormSchema = z.object({
   id: idSchema,
   name: z.string().min(1, "Name is required"),

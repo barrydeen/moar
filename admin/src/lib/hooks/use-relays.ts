@@ -8,6 +8,7 @@ import {
   getRelayPage,
   putRelayPage,
   deleteRelayPage,
+  importRelay,
 } from "../api/relays";
 import type { RelayConfig } from "../types/relay";
 
@@ -88,5 +89,12 @@ export function useDeleteRelayPage() {
     onSuccess: (_, id) => {
       queryClient.invalidateQueries({ queryKey: ["relays", id, "page"] });
     },
+  });
+}
+
+export function useImportRelay() {
+  return useMutation({
+    mutationFn: ({ id, file }: { id: string; file: File }) =>
+      importRelay(id, file),
   });
 }

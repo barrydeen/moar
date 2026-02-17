@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import type { Blossom } from "@/lib/types/blossom";
-import { Pencil, Trash2, Image } from "lucide-react";
+import { Pencil, Trash2 } from "lucide-react";
 
 interface BlossomCardProps {
   blossom: Blossom;
@@ -25,11 +25,6 @@ export function BlossomCard({ blossom, onDelete, domain }: BlossomCardProps) {
             <p className="text-sm text-muted-foreground font-mono">{url}</p>
           </div>
           <div className="flex gap-1">
-            <Link href={`/admin/blossoms/${blossom.id}/media`}>
-              <Button variant="ghost" size="icon" className="h-8 w-8">
-                <Image className="h-4 w-4" />
-              </Button>
-            </Link>
             <Link href={`/admin/blossoms/${blossom.id}/edit`}>
               <Button variant="ghost" size="icon" className="h-8 w-8">
                 <Pencil className="h-4 w-4" />

@@ -1,10 +1,20 @@
 "use client";
 
+import { useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { RelayForm } from "@/components/relays/relay-form";
-import { PageEditor } from "@/components/relays/page-editor";
-import { Separator } from "@/components/ui/separator";
+import { SubTabs } from "@/components/shared/sub-tabs";
+import { RelaySettingsForm } from "@/components/relays/relay-settings-form";
+import { RelayPoliciesForm } from "@/components/relays/relay-policies-form";
+import { RelayNip11Form } from "@/components/relays/relay-nip11-form";
+import { ImportExport } from "@/components/relays/import-export";
 import { useRelay } from "@/lib/hooks/use-relays";
+
+const tabs = [
+  { key: "settings", label: "Settings" },
+  { key: "policies", label: "Policies" },
+  { key: "nip11", label: "NIP-11" },
+  { key: "data", label: "Data" },
+];
 
 export default function EditRelayPage({
   params,
@@ -13,6 +23,7 @@ export default function EditRelayPage({
 }) {
   const { id } = params;
   const { data: relay, isLoading } = useRelay(id);
+  const [activeTab, setActiveTab] = useState("settings");
 
   if (isLoading) {
     return (
@@ -28,13 +39,15 @@ export default function EditRelayPage({
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       <div>
         <h2 className="text-2xl font-bold tracking-tight">Edit Relay: {relay.name}</h2>
       </div>
-      <RelayForm relay={relay} />
-      <Separator />
-      <PageEditor relayId={id} />
+      <SubTabs tabs={tabs} activeTab={activeTab} onTabChange={setActiveTab} />
+      {activeTab === "settings" && <RelaySettingsForm relay={relay} />}
+      {activeTab === "policies" && <RelayPoliciesForm relay={relay} />}
+      {activeTab === "nip11" && <RelayNip11Form relay={relay} relayId={id} />}
+      {activeTab === "data" && <ImportExport relayId={id} />}
     </div>
   );
 }

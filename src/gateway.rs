@@ -29,6 +29,7 @@ pub struct GatewayState {
     pub port: u16,
     pub relay_routers: HashMap<String, Router>,
     pub relay_configs: HashMap<String, RelayConfig>,
+    pub relay_stores: HashMap<String, Arc<dyn NostrStore>>,
     pub blossom_routers: HashMap<String, Router>,
     pub blossom_stores: HashMap<String, Arc<BlobStore>>,
     pub config: Arc<RwLock<MoarConfig>>,
@@ -70,6 +71,7 @@ pub async fn start_gateway(
 
     let mut router_map = HashMap::new();
     let mut config_map = HashMap::new();
+    let mut store_map: HashMap<String, Arc<dyn NostrStore>> = HashMap::new();
 
     for (key, (relay_config, store, policy)) in relays {
         let scheme = if domain == "localhost" { "http" } else { "https" };
@@ -77,6 +79,7 @@ pub async fn start_gateway(
             "{}://{}.{}",
             scheme, relay_config.subdomain, domain
         );
+        store_map.insert(key.clone(), store.clone());
         let state = Arc::new(RelayState::new(
             relay_config.clone(),
             store,
@@ -116,6 +119,7 @@ pub async fn start_gateway(
         port,
         relay_routers: router_map,
         relay_configs: config_map,
+        relay_stores: store_map,
         blossom_routers: blossom_router_map,
         blossom_stores: blossom_store_map,
         config: Arc::new(RwLock::new(config)),
@@ -211,6 +215,8 @@ pub fn admin_router() -> Router<Arc<GatewayState>> {
             "/api/relays/:id/page",
             get(get_relay_page).put(put_relay_page).delete(delete_relay_page),
         )
+        .route("/api/relays/:id/export", get(export_relay))
+        .route("/api/relays/:id/import", post(import_relay))
         .route("/api/wots", get(list_wots).post(create_wot))
         .route(
             "/api/wots/:id",
@@ -695,6 +701,136 @@ async fn delete_relay_page(
     let _ = tokio::fs::remove_file(&page_path).await;
 
     StatusCode::NO_CONTENT.into_response()
+}
+
+// --- Relay Import/Export Handlers ---
+
+async fn export_relay(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    let store = match state.relay_stores.get(&id) {
+        Some(s) => s.clone(),
+        None => return (StatusCode::NOT_FOUND, "Relay not found").into_response(),
+    };
+
+    let events = match store.iter_all() {
+        Ok(e) => e,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to read events: {}", e),
+            )
+                .into_response()
+        }
+    };
+
+    let mut body = String::new();
+    for event in &events {
+        if let Ok(json) = serde_json::to_string(event) {
+            body.push_str(&json);
+            body.push('\n');
+        }
+    }
+
+    let filename = format!("{}.jsonl", id);
+    (
+        [
+            (header::CONTENT_TYPE, "application/jsonl".to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{}\"", filename),
+            ),
+        ],
+        body,
+    )
+        .into_response()
+}
+
+#[derive(Serialize)]
+struct ImportResult {
+    imported: usize,
+    skipped: usize,
+    errors: usize,
+}
+
+async fn import_relay(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    let store = match state.relay_stores.get(&id) {
+        Some(s) => s.clone(),
+        None => return (StatusCode::NOT_FOUND, "Relay not found").into_response(),
+    };
+
+    let mut multipart = match axum::extract::Multipart::from_request(request, &()).await {
+        Ok(m) => m,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Expected multipart form data").into_response(),
+    };
+
+    let field = match multipart.next_field().await {
+        Ok(Some(f)) => f,
+        Ok(None) => return (StatusCode::BAD_REQUEST, "No file field found").into_response(),
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid multipart data").into_response(),
+    };
+
+    let data = match field.bytes().await {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Failed to read file data").into_response(),
+    };
+
+    let content = match String::from_utf8(data.to_vec()) {
+        Ok(s) => s,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid UTF-8 content").into_response(),
+    };
+
+    let mut imported = 0usize;
+    let mut skipped = 0usize;
+    let mut errors = 0usize;
+
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let event: nostr::Event = match serde_json::from_str(line) {
+            Ok(e) => e,
+            Err(_) => {
+                errors += 1;
+                continue;
+            }
+        };
+
+        if event.verify().is_err() {
+            errors += 1;
+            continue;
+        }
+
+        match store.save_event(&event) {
+            Ok(()) => imported += 1,
+            Err(_) => {
+                skipped += 1;
+            }
+        }
+    }
+
+    Json(ImportResult {
+        imported,
+        skipped,
+        errors,
+    })
+    .into_response()
 }
 
 // --- WoT Handlers ---
