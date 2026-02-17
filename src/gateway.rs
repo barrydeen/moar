@@ -545,7 +545,7 @@ async fn get_relay_page(
     let page_path = state.pages_dir.join(format!("{}.html", id));
     match tokio::fs::read_to_string(&page_path).await {
         Ok(content) => Json(serde_json::json!({ "html": content })).into_response(),
-        Err(_) => Json(serde_json::json!({ "html": null::<String> })).into_response(),
+        Err(_) => Json(serde_json::json!({ "html": serde_json::Value::Null })).into_response(),
     }
 }
 
