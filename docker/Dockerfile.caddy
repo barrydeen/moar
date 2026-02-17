@@ -1,0 +1,7 @@
+FROM caddy:latest
+
+RUN apk add --no-cache gettext
+
+COPY docker/Caddyfile.template /etc/caddy/Caddyfile.template
+
+CMD ["sh", "-c", "envsubst < /etc/caddy/Caddyfile.template > /etc/caddy/Caddyfile && caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"]

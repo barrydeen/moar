@@ -8,7 +8,7 @@ use crate::storage::NostrStore;
 use crate::wot::WotManager;
 use axum::{
     body::Body,
-    extract::{FromRequest, Host, Path, Request, State},
+    extract::{FromRequest, Host, Path, Query, Request, State},
     http::{header, StatusCode, Uri},
     response::{Html, IntoResponse, Response},
     routing::{delete as delete_route, get, post},
@@ -223,6 +223,7 @@ pub fn admin_router() -> Router<Arc<GatewayState>> {
         )
         .route("/api/blossoms/:id/media", get(list_blossom_media).post(upload_blossom_media))
         .route("/api/blossoms/:id/media/:sha256", delete_route(delete_blossom_media))
+        .route("/.well-known/caddy-ask", get(caddy_ask_handler))
 }
 
 async fn serve_index() -> impl IntoResponse {
@@ -1316,4 +1317,34 @@ async fn delete_blossom_media(
         Ok(false) => (StatusCode::NOT_FOUND, "Blob not found").into_response(),
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Delete failed").into_response(),
     }
+}
+
+// --- Caddy On-Demand TLS ---
+
+async fn caddy_ask_handler(
+    Query(params): Query<HashMap<String, String>>,
+    State(state): State<Arc<GatewayState>>,
+) -> impl IntoResponse {
+    let Some(domain) = params.get("domain") else {
+        return StatusCode::BAD_REQUEST;
+    };
+
+    // Check base domain
+    if domain == &state.domain {
+        return StatusCode::OK;
+    }
+
+    // Check relay/blossom subdomains
+    let expected_suffix = format!(".{}", state.domain);
+    if domain.ends_with(&expected_suffix) {
+        let subdomain = &domain[..domain.len() - expected_suffix.len()];
+        let config = state.config.read().await;
+        let is_relay = config.relays.values().any(|r| r.subdomain == subdomain);
+        let is_blossom = config.blossoms.values().any(|b| b.subdomain == subdomain);
+        if is_relay || is_blossom {
+            return StatusCode::OK;
+        }
+    }
+
+    StatusCode::NOT_FOUND
 }

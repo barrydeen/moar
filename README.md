@@ -13,11 +13,31 @@ A customizable, multi-tenant Nostr relay gateway built in Rust. Run multiple ind
 
 ## Quick Start
 
-### Prerequisites
+### Docker (Recommended)
 
-- Rust 1.75+ and Cargo
+The fastest way to deploy MOAR with automatic TLS:
 
-### Build & Run
+```bash
+git clone https://github.com/example/moar.git
+cd moar
+cp .env.example .env
+# Edit .env — set MOAR_DOMAIN and ADMIN_PUBKEY
+docker compose up -d
+```
+
+This starts MOAR behind Caddy, which automatically provisions TLS certificates for your domain and all relay subdomains. Just point your DNS `A` record (and `*.yourdomain`) at your server and open ports 80 + 443.
+
+Or use the one-line installer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/example/moar/master/install.sh | bash
+```
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for full Docker and bare-metal deployment guides.
+
+### From Source
+
+Prerequisites: Rust 1.75+ and Cargo
 
 ```bash
 git clone https://github.com/example/moar.git

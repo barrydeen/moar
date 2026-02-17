@@ -1,0 +1,16 @@
+{
+    on_demand_tls {
+        ask http://moar:8080/.well-known/caddy-ask
+    }
+}
+
+:443 {
+    tls {
+        on_demand
+    }
+    reverse_proxy moar:8080
+}
+
+:80 {
+    redir https://{host}{uri} permanent
+}
