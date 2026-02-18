@@ -1,6 +1,7 @@
 use moar::config::{PolicyConfig, RelayConfig};
 use moar::policy::PolicyEngine;
 use moar::server::{create_relay_router, RelayState};
+use moar::stats::RelayStats;
 use moar::storage::NostrStore;
 use nostr::{Event, Filter, JsonUtil, RelayMessage};
 use std::collections::HashMap;
@@ -45,6 +46,15 @@ impl NostrStore for MockStore {
     fn iter_all(&self) -> moar::error::Result<Vec<Event>> {
         let events = self.events.lock().unwrap();
         Ok(events.values().cloned().collect())
+    }
+
+    fn event_count(&self) -> moar::error::Result<u64> {
+        let events = self.events.lock().unwrap();
+        Ok(events.len() as u64)
+    }
+
+    fn db_path(&self) -> &str {
+        "/tmp/moar-test-unused"
     }
 
     fn query(&self, filter: &Filter) -> moar::error::Result<Vec<Event>> {
@@ -97,7 +107,7 @@ impl NostrStore for MockStore {
 pub async fn spawn_relay(policy: PolicyConfig) -> (u16, Arc<MockStore>) {
     let store = Arc::new(MockStore::new());
     let store_dyn: Arc<dyn NostrStore> = store.clone();
-    let policy_engine = Arc::new(PolicyEngine::new(policy.clone(), None, None, None, None));
+    let policy_engine = Arc::new(PolicyEngine::new(policy.clone(), Default::default(), None, None, None, None));
     let config = RelayConfig {
         name: "test".into(),
         description: None,
@@ -116,6 +126,8 @@ pub async fn spawn_relay(policy: PolicyConfig) -> (u16, Arc<MockStore>) {
         String::new(),
         None,
         None,
+        Arc::new(RelayStats::new()),
+        Arc::new(moar::rate_limit::IpTracker::new()),
     ));
     let app = create_relay_router(state);
 

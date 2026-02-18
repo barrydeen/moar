@@ -69,7 +69,7 @@ pub struct RelayConfig {
 }
 
 /// Optional NIP-11 relay information fields and limit overrides.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Nip11Config {
     pub icon: Option<String>,
     pub banner: Option<String>,
@@ -85,6 +85,25 @@ pub struct Nip11Config {
     pub created_at_upper_limit: Option<u64>,
 }
 
+impl Default for Nip11Config {
+    fn default() -> Self {
+        Self {
+            icon: None,
+            banner: None,
+            contact: None,
+            terms_of_service: None,
+            max_message_length: Some(524288),
+            max_subscriptions: Some(20),
+            max_subid_length: Some(64),
+            max_limit: Some(5000),
+            max_event_tags: Some(2500),
+            default_limit: Some(100),
+            created_at_lower_limit: Some(94608000),
+            created_at_upper_limit: Some(900),
+        }
+    }
+}
+
 /// Composable policy configuration — every field is optional and defaults to
 /// the most permissive value.  Users only specify what they want to restrict.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -95,7 +114,8 @@ pub struct PolicyConfig {
     pub read: ReadPolicy,
     #[serde(default)]
     pub events: EventPolicy,
-    pub rate_limit: Option<RateLimitConfig>,
+    #[serde(default)]
+    pub rate_limit: RateLimitConfig,
 }
 
 /// Controls who is allowed to publish events (EVENT messages).
@@ -184,6 +204,17 @@ impl Default for EventPolicy {
 pub struct RateLimitConfig {
     pub writes_per_minute: Option<u32>,
     pub reads_per_minute: Option<u32>,
+    pub max_connections: Option<u32>,
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            writes_per_minute: Some(20),
+            reads_per_minute: Some(60),
+            max_connections: Some(5),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

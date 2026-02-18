@@ -3,9 +3,10 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { Radio, HardDrive, Shield, Zap, Settings } from "lucide-react";
+import { LayoutDashboard, Radio, HardDrive, Shield, Zap, Settings } from "lucide-react";
 
 const tabs = [
+  { href: "/admin", label: "Dashboard", icon: LayoutDashboard, exact: true },
   { href: "/admin/relays", label: "Relays", icon: Radio },
   { href: "/admin/blossoms", label: "Blossom", icon: HardDrive },
   { href: "/admin/wot", label: "Web of Trust", icon: Shield },
@@ -21,7 +22,9 @@ export function TabNavigation() {
       <div className="container mx-auto px-4">
         <div className="flex gap-1">
           {tabs.map((tab) => {
-            const isActive = pathname.startsWith(tab.href);
+            const isActive = tab.exact
+              ? pathname === tab.href
+              : pathname.startsWith(tab.href);
             return (
               <Link
                 key={tab.href}

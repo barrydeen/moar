@@ -2,7 +2,7 @@ use nostr::{Event, Filter, Kind, PublicKey};
 use std::collections::HashSet;
 use std::str::FromStr;
 
-use crate::config::PolicyConfig;
+use crate::config::{Nip11Config, PolicyConfig};
 use crate::paywall::PaywallSet;
 use crate::wot::WotSet;
 
@@ -30,6 +30,7 @@ impl PolicyResult {
 /// from whatever rules were declared in the TOML config.
 pub struct PolicyEngine {
     config: PolicyConfig,
+    nip11: Nip11Config,
     write_allowed: Option<HashSet<PublicKey>>,
     write_blocked: Option<HashSet<PublicKey>>,
     write_tagged: Option<HashSet<PublicKey>>,
@@ -45,6 +46,7 @@ pub struct PolicyEngine {
 impl PolicyEngine {
     pub fn new(
         config: PolicyConfig,
+        nip11: Nip11Config,
         write_wot: Option<WotSet>,
         read_wot: Option<WotSet>,
         write_paywall: Option<PaywallSet>,
@@ -88,6 +90,7 @@ impl PolicyEngine {
 
         Self {
             config,
+            nip11,
             write_allowed,
             write_blocked,
             write_tagged,
@@ -192,6 +195,39 @@ impl PolicyEngine {
             }
         }
 
+        // NIP-11: max event tags
+        if let Some(max_tags) = self.nip11.max_event_tags {
+            if event.tags.len() as u64 > max_tags {
+                return PolicyResult::Deny(format!(
+                    "too many tags ({} > {})",
+                    event.tags.len(),
+                    max_tags
+                ));
+            }
+        }
+
+        // NIP-11: created_at lower limit (reject events too far in the past)
+        if let Some(lower) = self.nip11.created_at_lower_limit {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            if event.created_at.as_u64() < now.saturating_sub(lower) {
+                return PolicyResult::Deny("event created_at too far in the past".into());
+            }
+        }
+
+        // NIP-11: created_at upper limit (reject events too far in the future)
+        if let Some(upper) = self.nip11.created_at_upper_limit {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            if event.created_at.as_u64() > now + upper {
+                return PolicyResult::Deny("event created_at too far in the future".into());
+            }
+        }
+
         PolicyResult::Allow
     }
 
@@ -270,9 +306,20 @@ fn leading_zero_bits(bytes: &[u8]) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{EventPolicy, PolicyConfig, ReadPolicy, WritePolicy};
+    use crate::config::{EventPolicy, Nip11Config, PolicyConfig, ReadPolicy, WritePolicy};
     use nostr::nips::nip19::ToBech32;
     use nostr::{EventBuilder, Keys, Kind};
+
+    fn default_nip11() -> Nip11Config {
+        // Use permissive defaults for existing tests so they don't trip over
+        // the new NIP-11 enforcement.
+        Nip11Config {
+            max_event_tags: None,
+            created_at_lower_limit: None,
+            created_at_upper_limit: None,
+            ..Default::default()
+        }
+    }
 
     // -----------------------------------------------------------------------
     // Helpers
@@ -310,13 +357,13 @@ mod tests {
     fn default_open_policy_allows_write() {
         let keys = Keys::generate();
         let event = make_event(&keys, "hello");
-        let engine = PolicyEngine::new(open_policy(), None, None, None, None);
+        let engine = PolicyEngine::new(open_policy(), default_nip11(), None, None, None, None);
         assert!(engine.can_write(&event, None).is_allowed());
     }
 
     #[test]
     fn default_open_policy_allows_read() {
-        let engine = PolicyEngine::new(open_policy(), None, None, None, None);
+        let engine = PolicyEngine::new(open_policy(), default_nip11(), None, None, None, None);
         let filter = Filter::new();
         assert!(engine.can_read(&filter, None).is_allowed());
     }
@@ -332,7 +379,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None, None, None);
+        let engine = PolicyEngine::new(policy, default_nip11(), None, None, None, None);
         assert!(matches!(
             engine.can_write(&event, None),
             PolicyResult::AuthRequired
@@ -351,7 +398,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None, None, None);
+        let engine = PolicyEngine::new(policy, default_nip11(), None, None, None, None);
         assert!(engine.can_write(&event, Some(&pk)).is_allowed());
     }
 
@@ -364,7 +411,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None, None, None);
+        let engine = PolicyEngine::new(policy, default_nip11(), None, None, None, None);
         let filter = Filter::new();
         assert!(matches!(
             engine.can_read(&filter, None),
@@ -383,7 +430,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None, None, None);
+        let engine = PolicyEngine::new(policy, default_nip11(), None, None, None, None);
         let filter = Filter::new();
         assert!(engine.can_read(&filter, Some(&pk)).is_allowed());
     }
@@ -399,7 +446,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None, None, None);
+        let engine = PolicyEngine::new(policy, default_nip11(), None, None, None, None);
         assert!(engine.can_write(&event, None).is_allowed());
     }
 
@@ -414,7 +461,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None, None, None);
+        let engine = PolicyEngine::new(policy, default_nip11(), None, None, None, None);
         assert!(engine.can_write(&event, None).is_allowed());
     }
 
@@ -430,7 +477,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None, None, None);
+        let engine = PolicyEngine::new(policy, default_nip11(), None, None, None, None);
         assert!(matches!(
             engine.can_write(&event, None),
             PolicyResult::Deny(ref s) if s.contains("allow-list")
@@ -448,7 +495,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None, None, None);
+        let engine = PolicyEngine::new(policy, default_nip11(), None, None, None, None);
         assert!(matches!(
             engine.can_write(&event, None),
             PolicyResult::Deny(ref s) if s.contains("blocked")
@@ -467,7 +514,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None, None, None);
+        let engine = PolicyEngine::new(policy, default_nip11(), None, None, None, None);
         assert!(engine.can_write(&event, None).is_allowed());
     }
 
@@ -482,7 +529,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None, None, None);
+        let engine = PolicyEngine::new(policy, default_nip11(), None, None, None, None);
         assert!(engine.can_write(&event, None).is_allowed());
     }
 
@@ -497,7 +544,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None, None, None);
+        let engine = PolicyEngine::new(policy, default_nip11(), None, None, None, None);
         assert!(matches!(
             engine.can_write(&event, None),
             PolicyResult::Deny(ref s) if s.contains("not allowed")
@@ -517,7 +564,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None, None, None);
+        let engine = PolicyEngine::new(policy, default_nip11(), None, None, None, None);
         assert!(engine.can_write(&event1, None).is_allowed());
         assert!(engine.can_write(&event4, None).is_allowed());
         assert!(!engine.can_write(&event7, None).is_allowed());
@@ -534,7 +581,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None, None, None);
+        let engine = PolicyEngine::new(policy, default_nip11(), None, None, None, None);
         assert!(matches!(
             engine.can_write(&event, None),
             PolicyResult::Deny(ref s) if s.contains("blocked")
@@ -552,7 +599,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None, None, None);
+        let engine = PolicyEngine::new(policy, default_nip11(), None, None, None, None);
         assert!(engine.can_write(&event, None).is_allowed());
     }
 
@@ -568,7 +615,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None, None, None);
+        let engine = PolicyEngine::new(policy, default_nip11(), None, None, None, None);
         assert!(engine.can_write(&event, None).is_allowed());
     }
 
@@ -584,7 +631,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None, None, None);
+        let engine = PolicyEngine::new(policy, default_nip11(), None, None, None, None);
         assert!(matches!(
             engine.can_write(&event, None),
             PolicyResult::Deny(ref s) if s.contains("too long")
@@ -603,7 +650,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None, None, None);
+        let engine = PolicyEngine::new(policy, default_nip11(), None, None, None, None);
         assert!(matches!(
             engine.can_write(&event, None),
             PolicyResult::Deny(ref s) if s.contains("PoW")
@@ -621,7 +668,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None, None, None);
+        let engine = PolicyEngine::new(policy, default_nip11(), None, None, None, None);
         assert!(engine.can_write(&event, None).is_allowed());
     }
 
@@ -672,7 +719,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None, None, None);
+        let engine = PolicyEngine::new(policy, default_nip11(), None, None, None, None);
         assert!(matches!(
             engine.can_write(&event, None),
             PolicyResult::Deny(_)
@@ -692,7 +739,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None, None, None);
+        let engine = PolicyEngine::new(policy, default_nip11(), None, None, None, None);
         assert!(matches!(
             engine.can_write(&event, None),
             PolicyResult::Deny(_)
@@ -716,7 +763,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None, None, None);
+        let engine = PolicyEngine::new(policy, default_nip11(), None, None, None, None);
         assert!(matches!(
             engine.can_write(&event, None),
             PolicyResult::AuthRequired
@@ -737,7 +784,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None, None, None);
+        let engine = PolicyEngine::new(policy, default_nip11(), None, None, None, None);
         let pk = authed_keys.public_key();
         // Auth passes, but event.pubkey is not on allow-list
         assert!(matches!(
@@ -762,7 +809,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None, None, None);
+        let engine = PolicyEngine::new(policy, default_nip11(), None, None, None, None);
         assert!(matches!(
             engine.can_write(&event, None),
             PolicyResult::Deny(ref s) if s.contains("blocked")
@@ -783,7 +830,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None, None, None);
+        let engine = PolicyEngine::new(policy, default_nip11(), None, None, None, None);
         assert!(matches!(
             engine.can_write(&event, None),
             PolicyResult::Deny(ref s) if s.contains("too long")
@@ -803,7 +850,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None, None, None);
+        let engine = PolicyEngine::new(policy, default_nip11(), None, None, None, None);
         assert!(matches!(
             engine.can_write(&event, None),
             PolicyResult::Deny(ref s) if s.contains("PoW")
@@ -824,7 +871,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None, None, None);
+        let engine = PolicyEngine::new(policy, default_nip11(), None, None, None, None);
         let filter = Filter::new();
         let result = engine.can_read(&filter, None);
         // Should be Deny, NOT AuthRequired
@@ -846,7 +893,7 @@ mod tests {
             .unwrap()
             .as_secs();
         paywall.add(keys.public_key(), now + 3600);
-        let engine = PolicyEngine::new(open_policy(), None, None, Some(paywall), None);
+        let engine = PolicyEngine::new(open_policy(), default_nip11(), None, None, Some(paywall), None);
         assert!(engine.can_write(&event, None).is_allowed());
     }
 
@@ -856,7 +903,7 @@ mod tests {
         let keys = Keys::generate();
         let event = make_event(&keys, "hello");
         let paywall = PaywallSet::new_for_test();
-        let engine = PolicyEngine::new(open_policy(), None, None, Some(paywall), None);
+        let engine = PolicyEngine::new(open_policy(), default_nip11(), None, None, Some(paywall), None);
         assert!(matches!(
             engine.can_write(&event, None),
             PolicyResult::Deny(ref s) if s.contains("payment required")
@@ -871,7 +918,7 @@ mod tests {
         let paywall = PaywallSet::new_for_test();
         // Expired 1 second ago
         paywall.add(keys.public_key(), 1);
-        let engine = PolicyEngine::new(open_policy(), None, None, Some(paywall), None);
+        let engine = PolicyEngine::new(open_policy(), default_nip11(), None, None, Some(paywall), None);
         assert!(matches!(
             engine.can_write(&event, None),
             PolicyResult::Deny(ref s) if s.contains("payment required")
@@ -889,7 +936,7 @@ mod tests {
             .unwrap()
             .as_secs();
         paywall.add(pk, now + 3600);
-        let engine = PolicyEngine::new(open_policy(), None, None, None, Some(paywall));
+        let engine = PolicyEngine::new(open_policy(), default_nip11(), None, None, None, Some(paywall));
         let filter = Filter::new();
         assert!(engine.can_read(&filter, Some(&pk)).is_allowed());
     }
@@ -898,7 +945,7 @@ mod tests {
     fn paywall_read_requires_auth() {
         use crate::paywall::PaywallSet;
         let paywall = PaywallSet::new_for_test();
-        let engine = PolicyEngine::new(open_policy(), None, None, None, Some(paywall));
+        let engine = PolicyEngine::new(open_policy(), default_nip11(), None, None, None, Some(paywall));
         let filter = Filter::new();
         assert!(matches!(
             engine.can_read(&filter, None),
@@ -912,7 +959,7 @@ mod tests {
         let keys = Keys::generate();
         let pk = keys.public_key();
         let paywall = PaywallSet::new_for_test();
-        let engine = PolicyEngine::new(open_policy(), None, None, None, Some(paywall));
+        let engine = PolicyEngine::new(open_policy(), default_nip11(), None, None, None, Some(paywall));
         let filter = Filter::new();
         assert!(matches!(
             engine.can_read(&filter, Some(&pk)),
@@ -935,9 +982,112 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None, None, None);
+        let engine = PolicyEngine::new(policy, default_nip11(), None, None, None, None);
         let filter = Filter::new();
         let result = engine.can_read(&filter, Some(&other_pk));
         assert!(matches!(result, PolicyResult::Deny(_)));
+    }
+
+    // -----------------------------------------------------------------------
+    // NIP-11 enforcement tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn nip11_max_event_tags_allows_under_limit() {
+        let keys = Keys::generate();
+        let tags: Vec<nostr::Tag> = (0..5)
+            .map(|i| nostr::Tag::custom(nostr::TagKind::Custom(std::borrow::Cow::Borrowed("t")), vec![format!("tag{}", i)]))
+            .collect();
+        let event = EventBuilder::new(Kind::from(1u16), "hello", tags)
+            .to_event(&keys)
+            .unwrap();
+        let nip11 = Nip11Config {
+            max_event_tags: Some(10),
+            ..default_nip11()
+        };
+        let engine = PolicyEngine::new(open_policy(), nip11, None, None, None, None);
+        assert!(engine.can_write(&event, None).is_allowed());
+    }
+
+    #[test]
+    fn nip11_max_event_tags_rejects_over_limit() {
+        let keys = Keys::generate();
+        let tags: Vec<nostr::Tag> = (0..11)
+            .map(|i| nostr::Tag::custom(nostr::TagKind::Custom(std::borrow::Cow::Borrowed("t")), vec![format!("tag{}", i)]))
+            .collect();
+        let event = EventBuilder::new(Kind::from(1u16), "hello", tags)
+            .to_event(&keys)
+            .unwrap();
+        let nip11 = Nip11Config {
+            max_event_tags: Some(10),
+            ..default_nip11()
+        };
+        let engine = PolicyEngine::new(open_policy(), nip11, None, None, None, None);
+        assert!(matches!(
+            engine.can_write(&event, None),
+            PolicyResult::Deny(ref s) if s.contains("too many tags")
+        ));
+    }
+
+    #[test]
+    fn nip11_created_at_lower_limit_rejects_old_event() {
+        let keys = Keys::generate();
+        // Create event with timestamp far in the past (epoch)
+        let event = EventBuilder::new(Kind::from(1u16), "old event", [])
+            .custom_created_at(nostr::Timestamp::from(1u64))
+            .to_event(&keys)
+            .unwrap();
+        let nip11 = Nip11Config {
+            created_at_lower_limit: Some(3600), // only allow events from last hour
+            ..default_nip11()
+        };
+        let engine = PolicyEngine::new(open_policy(), nip11, None, None, None, None);
+        assert!(matches!(
+            engine.can_write(&event, None),
+            PolicyResult::Deny(ref s) if s.contains("too far in the past")
+        ));
+    }
+
+    #[test]
+    fn nip11_created_at_upper_limit_rejects_future_event() {
+        let keys = Keys::generate();
+        let far_future = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 7200; // 2 hours in the future
+        let event = EventBuilder::new(Kind::from(1u16), "future event", [])
+            .custom_created_at(nostr::Timestamp::from(far_future))
+            .to_event(&keys)
+            .unwrap();
+        let nip11 = Nip11Config {
+            created_at_upper_limit: Some(900), // only allow 15 min ahead
+            ..default_nip11()
+        };
+        let engine = PolicyEngine::new(open_policy(), nip11, None, None, None, None);
+        assert!(matches!(
+            engine.can_write(&event, None),
+            PolicyResult::Deny(ref s) if s.contains("too far in the future")
+        ));
+    }
+
+    #[test]
+    fn nip11_created_at_allows_recent_event() {
+        let keys = Keys::generate();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let event = EventBuilder::new(Kind::from(1u16), "recent event", [])
+            .custom_created_at(nostr::Timestamp::from(now))
+            .to_event(&keys)
+            .unwrap();
+        let nip11 = Nip11Config {
+            created_at_lower_limit: Some(3600),
+            created_at_upper_limit: Some(900),
+            ..default_nip11()
+        };
+        let engine = PolicyEngine::new(open_policy(), nip11, None, None, None, None);
+        assert!(engine.can_write(&event, None).is_allowed());
     }
 }

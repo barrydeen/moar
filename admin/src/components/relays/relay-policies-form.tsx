@@ -369,15 +369,15 @@ export function RelayPoliciesForm({ relay }: RelayPoliciesFormProps) {
       </CollapsibleSection>
 
       {/* Rate Limit */}
-      <CollapsibleSection title="Rate Limiting" summary="Configure request limits">
-        <div className="grid grid-cols-2 gap-4">
+      <CollapsibleSection title="Rate Limiting" summary="Configure per-IP limits">
+        <div className="grid grid-cols-3 gap-4">
           <div className="space-y-2">
             <Label htmlFor="writes_per_minute">Writes per Minute</Label>
             <Input
               id="writes_per_minute"
               type="number"
               {...register("policy.rate_limit.writes_per_minute")}
-              placeholder="Unlimited"
+              placeholder="Default: 20"
             />
           </div>
           <div className="space-y-2">
@@ -386,8 +386,18 @@ export function RelayPoliciesForm({ relay }: RelayPoliciesFormProps) {
               id="reads_per_minute"
               type="number"
               {...register("policy.rate_limit.reads_per_minute")}
-              placeholder="Unlimited"
+              placeholder="Default: 60"
             />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="max_connections">Max Connections</Label>
+            <Input
+              id="max_connections"
+              type="number"
+              {...register("policy.rate_limit.max_connections")}
+              placeholder="Default: 5"
+            />
+            <p className="text-xs text-muted-foreground">Per IP address</p>
           </div>
         </div>
       </CollapsibleSection>

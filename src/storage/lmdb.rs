@@ -72,6 +72,8 @@ pub struct LmdbStore {
     index_tag: Database<Bytes, Unit>,
     /// Pubkey(32) + Kind(BE 2) + Timestamp(BE 8) + EventId(32) = 74 bytes
     index_author_kind: Database<Bytes, Unit>,
+    /// Path to the LMDB directory
+    path: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +136,7 @@ impl LmdbStore {
 impl LmdbStore {
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         fs::create_dir_all(&path)?;
+        let path_str = path.as_ref().to_string_lossy().to_string();
 
         let mut env_builder = EnvOpenOptions::new();
         env_builder.max_dbs(20);
@@ -157,6 +160,7 @@ impl LmdbStore {
             index_kind,
             index_tag,
             index_author_kind,
+            path: path_str,
         })
     }
 }
@@ -396,6 +400,16 @@ impl NostrStore for LmdbStore {
             events.push(event);
         }
         Ok(events)
+    }
+
+    fn event_count(&self) -> Result<u64> {
+        let rtxn = self.env.read_txn()?;
+        let stat = self.events_db.stat(&rtxn)?;
+        Ok(stat.entries as u64)
+    }
+
+    fn db_path(&self) -> &str {
+        &self.path
     }
 
     fn query(&self, filter: &Filter) -> Result<Vec<Event>> {
