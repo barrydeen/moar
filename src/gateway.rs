@@ -1,7 +1,8 @@
 use crate::auth::verify_auth_event;
 use crate::blossom::handlers::{self as blossom_handlers, BlossomState};
 use crate::blossom::store::BlobStore;
-use crate::config::{BlossomConfig, MoarConfig, RelayConfig, WotConfig};
+use crate::config::{BlossomConfig, MoarConfig, PaywallConfig, RelayConfig, WotConfig};
+use crate::paywall::PaywallManager;
 use crate::policy::PolicyEngine;
 use crate::server::{self, RelayState};
 use crate::storage::NostrStore;
@@ -38,6 +39,7 @@ pub struct GatewayState {
     pub pending_restart: Arc<RwLock<bool>>,
     pub sessions: Arc<RwLock<HashMap<String, SessionInfo>>>,
     pub wot_manager: Arc<WotManager>,
+    pub paywall_manager: Arc<PaywallManager>,
 }
 
 #[derive(Clone, Debug)]
@@ -64,6 +66,7 @@ pub async fn start_gateway(
     config: MoarConfig,
     config_path: PathBuf,
     wot_manager: Arc<WotManager>,
+    paywall_manager: Arc<PaywallManager>,
 ) -> crate::error::Result<()> {
     let pages_dir = PathBuf::from(&config.pages_dir);
     // Ensure the pages directory exists
@@ -80,6 +83,16 @@ pub async fn start_gateway(
             scheme, relay_config.subdomain, domain
         );
         store_map.insert(key.clone(), store.clone());
+
+        // Determine paywall for this relay (write and read reference the same ID)
+        let paywall_id = relay_config
+            .policy
+            .write
+            .paywall
+            .as_ref()
+            .or(relay_config.policy.read.paywall.as_ref())
+            .cloned();
+
         let state = Arc::new(RelayState::new(
             relay_config.clone(),
             store,
@@ -88,6 +101,8 @@ pub async fn start_gateway(
             pages_dir.clone(),
             config.admin_pubkey.clone(),
             relay_url,
+            paywall_id.as_ref().map(|_| paywall_manager.clone()),
+            paywall_id,
         ));
         let app = server::create_relay_router(state);
         router_map.insert(relay_config.subdomain.clone(), app);
@@ -128,6 +143,7 @@ pub async fn start_gateway(
         pending_restart: Arc::new(RwLock::new(false)),
         sessions: Arc::new(RwLock::new(HashMap::new())),
         wot_manager,
+        paywall_manager,
     });
 
     let app = Router::new().fallback(handler).with_state(state);
@@ -235,6 +251,13 @@ pub fn admin_router() -> Router<Arc<GatewayState>> {
         )
         .route("/api/blossoms/:id/media", get(list_blossom_media).post(upload_blossom_media))
         .route("/api/blossoms/:id/media/:sha256", delete_route(delete_blossom_media))
+        .route("/api/paywalls", get(list_paywalls).post(create_paywall))
+        .route(
+            "/api/paywalls/:id",
+            get(get_paywall).put(update_paywall).delete(delete_paywall),
+        )
+        .route("/api/paywalls/:id/verify-nwc", post(verify_nwc_handler))
+        .route("/api/paywalls/:id/whitelist", get(get_paywall_whitelist))
         .route("/api/restart", post(restart_handler))
         .route("/api/update", post(update_handler))
         .route("/api/update-status", get(update_status_handler))
@@ -1457,6 +1480,253 @@ async fn delete_blossom_media(
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => (StatusCode::NOT_FOUND, "Blob not found").into_response(),
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Delete failed").into_response(),
+    }
+}
+
+// --- Paywall Handlers ---
+
+async fn list_paywalls(
+    State(state): State<Arc<GatewayState>>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    let paywalls = state.paywall_manager.list_paywalls().await;
+    Json(paywalls).into_response()
+}
+
+async fn get_paywall(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    match state.paywall_manager.get_paywall_info(&id).await {
+        Some(info) => Json(info).into_response(),
+        None => (StatusCode::NOT_FOUND, "Paywall not found").into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct CreatePaywallRequest {
+    id: String,
+    nwc_string: String,
+    price_sats: u64,
+    #[serde(default = "default_period")]
+    period_days: u32,
+}
+
+fn default_period() -> u32 {
+    30
+}
+
+async fn create_paywall(
+    State(state): State<Arc<GatewayState>>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    let body = match axum::body::to_bytes(request.into_body(), 1024 * 64).await {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid body").into_response(),
+    };
+
+    let payload: CreatePaywallRequest = match serde_json::from_slice(&body) {
+        Ok(p) => p,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, format!("Invalid JSON: {}", e)).into_response()
+        }
+    };
+
+    if let Err(e) = validate_relay_id(&payload.id) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
+
+    if payload.price_sats == 0 {
+        return (StatusCode::BAD_REQUEST, "Price must be greater than 0").into_response();
+    }
+
+    let paywall_config = PaywallConfig {
+        nwc_string: payload.nwc_string,
+        price_sats: payload.price_sats,
+        period_days: payload.period_days,
+    };
+
+    if let Err(e) = state
+        .paywall_manager
+        .add_paywall(payload.id.clone(), paywall_config.clone())
+        .await
+    {
+        return (StatusCode::CONFLICT, e).into_response();
+    }
+
+    // Save to config
+    let mut config = state.config.write().await;
+    config.paywalls.insert(payload.id.clone(), paywall_config);
+    if let Err(resp) = save_config(&state, &config).await {
+        return resp;
+    }
+
+    (StatusCode::CREATED, "Paywall created").into_response()
+}
+
+#[derive(Deserialize)]
+struct UpdatePaywallRequest {
+    nwc_string: String,
+    price_sats: u64,
+    #[serde(default = "default_period")]
+    period_days: u32,
+}
+
+async fn update_paywall(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    let body = match axum::body::to_bytes(request.into_body(), 1024 * 64).await {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid body").into_response(),
+    };
+
+    let payload: UpdatePaywallRequest = match serde_json::from_slice(&body) {
+        Ok(p) => p,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, format!("Invalid JSON: {}", e)).into_response()
+        }
+    };
+
+    if payload.price_sats == 0 {
+        return (StatusCode::BAD_REQUEST, "Price must be greater than 0").into_response();
+    }
+
+    let paywall_config = PaywallConfig {
+        nwc_string: payload.nwc_string,
+        price_sats: payload.price_sats,
+        period_days: payload.period_days,
+    };
+
+    if let Err(e) = state
+        .paywall_manager
+        .update_paywall(&id, paywall_config.clone())
+        .await
+    {
+        return (StatusCode::NOT_FOUND, e).into_response();
+    }
+
+    let mut config = state.config.write().await;
+    config.paywalls.insert(id, paywall_config);
+    if let Err(resp) = save_config(&state, &config).await {
+        return resp;
+    }
+
+    (StatusCode::OK, "Paywall updated").into_response()
+}
+
+async fn delete_paywall(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    // Check if any relay policies reference this paywall
+    let config = state.config.read().await;
+    let mut referencing_relays = Vec::new();
+    for (relay_id, relay_conf) in &config.relays {
+        if relay_conf.policy.write.paywall.as_deref() == Some(&id)
+            || relay_conf.policy.read.paywall.as_deref() == Some(&id)
+        {
+            referencing_relays.push(relay_id.clone());
+        }
+    }
+    drop(config);
+
+    if !referencing_relays.is_empty() {
+        return (
+            StatusCode::CONFLICT,
+            format!(
+                "Paywall '{}' is referenced by relay policies: {}. Remove the paywall references first.",
+                id,
+                referencing_relays.join(", ")
+            ),
+        )
+            .into_response();
+    }
+
+    if let Err(e) = state.paywall_manager.remove_paywall(&id).await {
+        return (StatusCode::NOT_FOUND, e).into_response();
+    }
+
+    let mut config = state.config.write().await;
+    config.paywalls.remove(&id);
+    if let Err(resp) = save_config(&state, &config).await {
+        return resp;
+    }
+
+    StatusCode::NO_CONTENT.into_response()
+}
+
+#[derive(Deserialize)]
+struct VerifyNwcRequest {
+    nwc_string: String,
+}
+
+async fn verify_nwc_handler(
+    State(state): State<Arc<GatewayState>>,
+    Path(_id): Path<String>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    let body = match axum::body::to_bytes(request.into_body(), 1024 * 64).await {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid body").into_response(),
+    };
+
+    let payload: VerifyNwcRequest = match serde_json::from_slice(&body) {
+        Ok(p) => p,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, format!("Invalid JSON: {}", e)).into_response()
+        }
+    };
+
+    match state.paywall_manager.verify_nwc(&payload.nwc_string).await {
+        Ok(()) => (StatusCode::OK, "NWC connection verified").into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            format!("NWC verification failed: {}", e),
+        )
+            .into_response(),
+    }
+}
+
+async fn get_paywall_whitelist(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    match state.paywall_manager.get_whitelist(&id).await {
+        Some(entries) => Json(entries).into_response(),
+        None => (StatusCode::NOT_FOUND, "Paywall not found").into_response(),
     }
 }
 

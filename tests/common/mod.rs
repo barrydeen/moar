@@ -42,6 +42,11 @@ impl NostrStore for MockStore {
         Ok(events.remove(id).is_some())
     }
 
+    fn iter_all(&self) -> moar::error::Result<Vec<Event>> {
+        let events = self.events.lock().unwrap();
+        Ok(events.values().cloned().collect())
+    }
+
     fn query(&self, filter: &Filter) -> moar::error::Result<Vec<Event>> {
         let events = self.events.lock().unwrap();
         let limit = filter.limit.unwrap_or(100);
@@ -92,13 +97,14 @@ impl NostrStore for MockStore {
 pub async fn spawn_relay(policy: PolicyConfig) -> (u16, Arc<MockStore>) {
     let store = Arc::new(MockStore::new());
     let store_dyn: Arc<dyn NostrStore> = store.clone();
-    let policy_engine = Arc::new(PolicyEngine::new(policy.clone(), None, None));
+    let policy_engine = Arc::new(PolicyEngine::new(policy.clone(), None, None, None, None));
     let config = RelayConfig {
         name: "test".into(),
         description: None,
         subdomain: "test".into(),
         db_path: "/tmp/moar-test-unused".into(),
         policy,
+        nip11: Default::default(),
     };
     let state = Arc::new(RelayState::new(
         config,
@@ -106,6 +112,10 @@ pub async fn spawn_relay(policy: PolicyConfig) -> (u16, Arc<MockStore>) {
         policy_engine,
         "test".into(),
         std::path::PathBuf::from("/tmp/moar-test-pages"),
+        String::new(),
+        String::new(),
+        None,
+        None,
     ));
     let app = create_relay_router(state);
 

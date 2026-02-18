@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { use, useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SubTabs } from "@/components/shared/sub-tabs";
 import { BlossomForm } from "@/components/blossoms/blossom-form";
@@ -16,9 +16,9 @@ const tabs = [
 export default function EditBlossomPage({
   params,
 }: {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }) {
-  const { id } = params;
+  const { id } = use(params);
   const { data: blossom, isLoading } = useBlossom(id);
   const [activeTab, setActiveTab] = useState("settings");
 

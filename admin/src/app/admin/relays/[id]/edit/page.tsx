@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { use, useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SubTabs } from "@/components/shared/sub-tabs";
 import { RelaySettingsForm } from "@/components/relays/relay-settings-form";
@@ -19,9 +19,9 @@ const tabs = [
 export default function EditRelayPage({
   params,
 }: {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }) {
-  const { id } = params;
+  const { id } = use(params);
   const { data: relay, isLoading } = useRelay(id);
   const [activeTab, setActiveTab] = useState("settings");
 

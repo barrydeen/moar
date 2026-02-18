@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::str::FromStr;
 
 use crate::config::PolicyConfig;
+use crate::paywall::PaywallSet;
 use crate::wot::WotSet;
 
 /// Result of a policy check.
@@ -37,10 +38,18 @@ pub struct PolicyEngine {
     blocked_kinds: Option<HashSet<Kind>>,
     write_wot: Option<WotSet>,
     read_wot: Option<WotSet>,
+    write_paywall: Option<PaywallSet>,
+    read_paywall: Option<PaywallSet>,
 }
 
 impl PolicyEngine {
-    pub fn new(config: PolicyConfig, write_wot: Option<WotSet>, read_wot: Option<WotSet>) -> Self {
+    pub fn new(
+        config: PolicyConfig,
+        write_wot: Option<WotSet>,
+        read_wot: Option<WotSet>,
+        write_paywall: Option<PaywallSet>,
+        read_paywall: Option<PaywallSet>,
+    ) -> Self {
         let write_allowed = config
             .write
             .allowed_pubkeys
@@ -87,6 +96,8 @@ impl PolicyEngine {
             blocked_kinds,
             write_wot,
             read_wot,
+            write_paywall,
+            read_paywall,
         }
     }
 
@@ -113,6 +124,13 @@ impl PolicyEngine {
         if let Some(ref wot) = self.write_wot {
             if !wot.contains(&event.pubkey) {
                 return PolicyResult::Deny("pubkey not in web of trust".into());
+            }
+        }
+
+        // Paywall check (checked against event author, no auth needed)
+        if let Some(ref paywall) = self.write_paywall {
+            if !paywall.contains(&event.pubkey) {
+                return PolicyResult::Deny("payment required for write access".into());
             }
         }
 
@@ -205,6 +223,17 @@ impl PolicyEngine {
             }
         }
 
+        // Paywall check (requires auth to identify reader)
+        if let Some(ref paywall) = self.read_paywall {
+            match authed_pubkey {
+                Some(pk) if paywall.contains(pk) => {}
+                Some(_) => {
+                    return PolicyResult::Deny("payment required for read access".into())
+                }
+                None => return PolicyResult::AuthRequired,
+            }
+        }
+
         PolicyResult::Allow
     }
 }
@@ -281,13 +310,13 @@ mod tests {
     fn default_open_policy_allows_write() {
         let keys = Keys::generate();
         let event = make_event(&keys, "hello");
-        let engine = PolicyEngine::new(open_policy(), None, None);
+        let engine = PolicyEngine::new(open_policy(), None, None, None, None);
         assert!(engine.can_write(&event, None).is_allowed());
     }
 
     #[test]
     fn default_open_policy_allows_read() {
-        let engine = PolicyEngine::new(open_policy(), None, None);
+        let engine = PolicyEngine::new(open_policy(), None, None, None, None);
         let filter = Filter::new();
         assert!(engine.can_read(&filter, None).is_allowed());
     }
@@ -303,7 +332,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None);
+        let engine = PolicyEngine::new(policy, None, None, None, None);
         assert!(matches!(
             engine.can_write(&event, None),
             PolicyResult::AuthRequired
@@ -322,7 +351,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None);
+        let engine = PolicyEngine::new(policy, None, None, None, None);
         assert!(engine.can_write(&event, Some(&pk)).is_allowed());
     }
 
@@ -335,7 +364,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None);
+        let engine = PolicyEngine::new(policy, None, None, None, None);
         let filter = Filter::new();
         assert!(matches!(
             engine.can_read(&filter, None),
@@ -354,7 +383,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None);
+        let engine = PolicyEngine::new(policy, None, None, None, None);
         let filter = Filter::new();
         assert!(engine.can_read(&filter, Some(&pk)).is_allowed());
     }
@@ -370,7 +399,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None);
+        let engine = PolicyEngine::new(policy, None, None, None, None);
         assert!(engine.can_write(&event, None).is_allowed());
     }
 
@@ -385,7 +414,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None);
+        let engine = PolicyEngine::new(policy, None, None, None, None);
         assert!(engine.can_write(&event, None).is_allowed());
     }
 
@@ -401,7 +430,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None);
+        let engine = PolicyEngine::new(policy, None, None, None, None);
         assert!(matches!(
             engine.can_write(&event, None),
             PolicyResult::Deny(ref s) if s.contains("allow-list")
@@ -419,7 +448,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None);
+        let engine = PolicyEngine::new(policy, None, None, None, None);
         assert!(matches!(
             engine.can_write(&event, None),
             PolicyResult::Deny(ref s) if s.contains("blocked")
@@ -438,7 +467,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None);
+        let engine = PolicyEngine::new(policy, None, None, None, None);
         assert!(engine.can_write(&event, None).is_allowed());
     }
 
@@ -453,7 +482,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None);
+        let engine = PolicyEngine::new(policy, None, None, None, None);
         assert!(engine.can_write(&event, None).is_allowed());
     }
 
@@ -468,7 +497,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None);
+        let engine = PolicyEngine::new(policy, None, None, None, None);
         assert!(matches!(
             engine.can_write(&event, None),
             PolicyResult::Deny(ref s) if s.contains("not allowed")
@@ -488,7 +517,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None);
+        let engine = PolicyEngine::new(policy, None, None, None, None);
         assert!(engine.can_write(&event1, None).is_allowed());
         assert!(engine.can_write(&event4, None).is_allowed());
         assert!(!engine.can_write(&event7, None).is_allowed());
@@ -505,7 +534,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None);
+        let engine = PolicyEngine::new(policy, None, None, None, None);
         assert!(matches!(
             engine.can_write(&event, None),
             PolicyResult::Deny(ref s) if s.contains("blocked")
@@ -523,7 +552,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None);
+        let engine = PolicyEngine::new(policy, None, None, None, None);
         assert!(engine.can_write(&event, None).is_allowed());
     }
 
@@ -539,7 +568,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None);
+        let engine = PolicyEngine::new(policy, None, None, None, None);
         assert!(engine.can_write(&event, None).is_allowed());
     }
 
@@ -555,7 +584,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None);
+        let engine = PolicyEngine::new(policy, None, None, None, None);
         assert!(matches!(
             engine.can_write(&event, None),
             PolicyResult::Deny(ref s) if s.contains("too long")
@@ -574,7 +603,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None);
+        let engine = PolicyEngine::new(policy, None, None, None, None);
         assert!(matches!(
             engine.can_write(&event, None),
             PolicyResult::Deny(ref s) if s.contains("PoW")
@@ -592,7 +621,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None);
+        let engine = PolicyEngine::new(policy, None, None, None, None);
         assert!(engine.can_write(&event, None).is_allowed());
     }
 
@@ -643,7 +672,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None);
+        let engine = PolicyEngine::new(policy, None, None, None, None);
         assert!(matches!(
             engine.can_write(&event, None),
             PolicyResult::Deny(_)
@@ -663,7 +692,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None);
+        let engine = PolicyEngine::new(policy, None, None, None, None);
         assert!(matches!(
             engine.can_write(&event, None),
             PolicyResult::Deny(_)
@@ -687,7 +716,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None);
+        let engine = PolicyEngine::new(policy, None, None, None, None);
         assert!(matches!(
             engine.can_write(&event, None),
             PolicyResult::AuthRequired
@@ -708,7 +737,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None);
+        let engine = PolicyEngine::new(policy, None, None, None, None);
         let pk = authed_keys.public_key();
         // Auth passes, but event.pubkey is not on allow-list
         assert!(matches!(
@@ -733,7 +762,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None);
+        let engine = PolicyEngine::new(policy, None, None, None, None);
         assert!(matches!(
             engine.can_write(&event, None),
             PolicyResult::Deny(ref s) if s.contains("blocked")
@@ -754,7 +783,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None);
+        let engine = PolicyEngine::new(policy, None, None, None, None);
         assert!(matches!(
             engine.can_write(&event, None),
             PolicyResult::Deny(ref s) if s.contains("too long")
@@ -774,7 +803,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None);
+        let engine = PolicyEngine::new(policy, None, None, None, None);
         assert!(matches!(
             engine.can_write(&event, None),
             PolicyResult::Deny(ref s) if s.contains("PoW")
@@ -791,14 +820,104 @@ mod tests {
                 require_auth: false,
                 allowed_pubkeys: Some(vec![hex_pubkey(&keys)]),
                 wot: None,
+                paywall: None,
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None);
+        let engine = PolicyEngine::new(policy, None, None, None, None);
         let filter = Filter::new();
         let result = engine.can_read(&filter, None);
         // Should be Deny, NOT AuthRequired
         assert!(matches!(result, PolicyResult::Deny(_)));
+    }
+
+    // -----------------------------------------------------------------------
+    // Paywall tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn paywall_write_allows_whitelisted() {
+        use crate::paywall::PaywallSet;
+        let keys = Keys::generate();
+        let event = make_event(&keys, "hello");
+        let paywall = PaywallSet::new_for_test();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        paywall.add(keys.public_key(), now + 3600);
+        let engine = PolicyEngine::new(open_policy(), None, None, Some(paywall), None);
+        assert!(engine.can_write(&event, None).is_allowed());
+    }
+
+    #[test]
+    fn paywall_write_denies_non_whitelisted() {
+        use crate::paywall::PaywallSet;
+        let keys = Keys::generate();
+        let event = make_event(&keys, "hello");
+        let paywall = PaywallSet::new_for_test();
+        let engine = PolicyEngine::new(open_policy(), None, None, Some(paywall), None);
+        assert!(matches!(
+            engine.can_write(&event, None),
+            PolicyResult::Deny(ref s) if s.contains("payment required")
+        ));
+    }
+
+    #[test]
+    fn paywall_write_denies_expired() {
+        use crate::paywall::PaywallSet;
+        let keys = Keys::generate();
+        let event = make_event(&keys, "hello");
+        let paywall = PaywallSet::new_for_test();
+        // Expired 1 second ago
+        paywall.add(keys.public_key(), 1);
+        let engine = PolicyEngine::new(open_policy(), None, None, Some(paywall), None);
+        assert!(matches!(
+            engine.can_write(&event, None),
+            PolicyResult::Deny(ref s) if s.contains("payment required")
+        ));
+    }
+
+    #[test]
+    fn paywall_read_allows_whitelisted() {
+        use crate::paywall::PaywallSet;
+        let keys = Keys::generate();
+        let pk = keys.public_key();
+        let paywall = PaywallSet::new_for_test();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        paywall.add(pk, now + 3600);
+        let engine = PolicyEngine::new(open_policy(), None, None, None, Some(paywall));
+        let filter = Filter::new();
+        assert!(engine.can_read(&filter, Some(&pk)).is_allowed());
+    }
+
+    #[test]
+    fn paywall_read_requires_auth() {
+        use crate::paywall::PaywallSet;
+        let paywall = PaywallSet::new_for_test();
+        let engine = PolicyEngine::new(open_policy(), None, None, None, Some(paywall));
+        let filter = Filter::new();
+        assert!(matches!(
+            engine.can_read(&filter, None),
+            PolicyResult::AuthRequired
+        ));
+    }
+
+    #[test]
+    fn paywall_read_denies_non_whitelisted() {
+        use crate::paywall::PaywallSet;
+        let keys = Keys::generate();
+        let pk = keys.public_key();
+        let paywall = PaywallSet::new_for_test();
+        let engine = PolicyEngine::new(open_policy(), None, None, None, Some(paywall));
+        let filter = Filter::new();
+        assert!(matches!(
+            engine.can_read(&filter, Some(&pk)),
+            PolicyResult::Deny(ref s) if s.contains("payment required")
+        ));
     }
 
     #[test]
@@ -812,10 +931,11 @@ mod tests {
                 require_auth: true,
                 allowed_pubkeys: Some(vec![hex_pubkey(&allowed_keys)]),
                 wot: None,
+                paywall: None,
             },
             ..Default::default()
         };
-        let engine = PolicyEngine::new(policy, None, None);
+        let engine = PolicyEngine::new(policy, None, None, None, None);
         let filter = Filter::new();
         let result = engine.can_read(&filter, Some(&other_pk));
         assert!(matches!(result, PolicyResult::Deny(_)));

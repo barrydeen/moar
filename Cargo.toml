@@ -30,6 +30,8 @@ base64 = "0.22"
 mime_guess = "2.0"
 tokio-util = { version = "0.7", features = ["io"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+rand = "0.8"
+qrcode = "0.14"
 
 [dev-dependencies]
 tempfile = "3.10"

@@ -1,5 +1,6 @@
 "use client";
 
+import { use } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { WotForm } from "@/components/wot/wot-form";
 import { useWot } from "@/lib/hooks/use-wot";
@@ -7,9 +8,9 @@ import { useWot } from "@/lib/hooks/use-wot";
 export default function EditWotPage({
   params,
 }: {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }) {
-  const { id } = params;
+  const { id } = use(params);
   const { data: wot, isLoading } = useWot(id);
 
   if (isLoading) {

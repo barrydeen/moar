@@ -1,9 +1,10 @@
 import { redirect } from "next/navigation";
 
-export default function MediaPage({
+export default async function MediaPage({
   params,
 }: {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }) {
-  redirect(`/admin/blossoms/${params.id}/edit`);
+  const { id } = await params;
+  redirect(`/admin/blossoms/${id}/edit`);
 }

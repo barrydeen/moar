@@ -1,22 +1,25 @@
 use axum::{
+    body::Body,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        State,
+        Query, Request, State,
     },
-    http::{header, HeaderMap},
+    http::{header, HeaderMap, StatusCode},
     response::{Html, IntoResponse},
-    routing::get,
-    Router,
+    routing::{get, post},
+    Json, Router,
 };
 use futures::{sink::SinkExt, stream::StreamExt};
-use nostr::{ClientMessage, Event, JsonUtil, RelayMessage};
-use serde::Serialize;
+use nostr::{ClientMessage, Event, JsonUtil, PublicKey, RelayMessage};
+use std::str::FromStr;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::config::RelayConfig;
+use crate::paywall::PaywallManager;
 use crate::policy::{PolicyEngine, PolicyResult};
 use crate::storage::NostrStore;
 
@@ -29,6 +32,8 @@ pub struct RelayState {
     pub admin_pubkey: String,
     pub relay_url: String,
     pub tx: broadcast::Sender<Event>,
+    pub paywall_manager: Option<Arc<PaywallManager>>,
+    pub paywall_id: Option<String>,
 }
 
 impl RelayState {
@@ -40,6 +45,8 @@ impl RelayState {
         pages_dir: PathBuf,
         admin_pubkey: String,
         relay_url: String,
+        paywall_manager: Option<Arc<PaywallManager>>,
+        paywall_id: Option<String>,
     ) -> Self {
         let (tx, _rx) = broadcast::channel(100);
         Self {
@@ -51,6 +58,8 @@ impl RelayState {
             admin_pubkey,
             relay_url,
             tx,
+            paywall_manager,
+            paywall_id,
         }
     }
 }
@@ -58,11 +67,18 @@ impl RelayState {
 pub fn create_relay_router(state: Arc<RelayState>) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
-        .allow_methods([axum::http::Method::GET, axum::http::Method::OPTIONS])
+        .allow_methods([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::OPTIONS,
+        ])
         .allow_headers(Any);
 
     Router::new()
         .route("/", get(root_handler))
+        .route("/checkout/info", get(checkout_info_handler))
+        .route("/checkout", post(checkout_handler))
+        .route("/checkout/status", get(checkout_status_handler))
         .layer(cors)
         .with_state(state)
 }
@@ -97,6 +113,20 @@ async fn root_handler(
     let page_path = state.pages_dir.join(format!("{}.html", state.relay_id));
     if let Ok(content) = tokio::fs::read_to_string(&page_path).await {
         return Html(content).into_response();
+    }
+
+    // If this relay has a paywall, serve the checkout page
+    if let (Some(ref pm), Some(ref pw_id)) = (&state.paywall_manager, &state.paywall_id) {
+        if let Some(info) = pm.get_paywall_info(pw_id).await {
+            let access_mode = determine_access_mode(&state.config);
+            let template = include_str!("web/checkout.html");
+            let html = template
+                .replace("{{RELAY_NAME}}", &html_escape(&state.config.name))
+                .replace("{{PRICE_SATS}}", &info.price_sats.to_string())
+                .replace("{{PERIOD_DAYS}}", &info.period_days.to_string())
+                .replace("{{ACCESS_MODE}}", access_mode);
+            return Html(html).into_response();
+        }
     }
 
     // Default relay info page
@@ -187,6 +217,7 @@ struct Nip11Limitation {
     min_pow_difficulty: Option<u8>,
     auth_required: bool,
     restricted_writes: bool,
+    payment_required: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     created_at_lower_limit: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -200,7 +231,9 @@ fn build_nip11(state: &RelayState) -> Nip11Document {
     let auth_required = policy.write.require_auth || policy.read.require_auth;
     let restricted_writes = policy.write.allowed_pubkeys.is_some()
         || policy.write.wot.is_some()
-        || policy.write.tagged_pubkeys.is_some();
+        || policy.write.tagged_pubkeys.is_some()
+        || policy.write.paywall.is_some();
+    let payment_required = policy.write.paywall.is_some() || policy.read.paywall.is_some();
 
     let pubkey = if state.admin_pubkey.is_empty() {
         None
@@ -230,11 +263,179 @@ fn build_nip11(state: &RelayState) -> Nip11Document {
             min_pow_difficulty: policy.events.min_pow,
             auth_required,
             restricted_writes,
+            payment_required,
             created_at_lower_limit: nip11.created_at_lower_limit,
             created_at_upper_limit: nip11.created_at_upper_limit,
         },
     }
 }
+
+fn determine_access_mode(config: &RelayConfig) -> &'static str {
+    let has_write = config.policy.write.paywall.is_some();
+    let has_read = config.policy.read.paywall.is_some();
+    match (has_write, has_read) {
+        (true, true) => "read and write",
+        (true, false) => "write",
+        (false, true) => "read",
+        (false, false) => "none",
+    }
+}
+
+// --- Checkout Handlers ---
+
+#[derive(Serialize)]
+struct CheckoutInfoResponse {
+    price_sats: u64,
+    period_days: u32,
+    access_mode: String,
+    relay_name: String,
+}
+
+async fn checkout_info_handler(
+    State(state): State<Arc<RelayState>>,
+) -> impl IntoResponse {
+    let (pm, pw_id) = match (&state.paywall_manager, &state.paywall_id) {
+        (Some(pm), Some(id)) => (pm, id),
+        _ => return (StatusCode::NOT_FOUND, "No paywall configured").into_response(),
+    };
+
+    match pm.get_paywall_info(pw_id).await {
+        Some(info) => Json(CheckoutInfoResponse {
+            price_sats: info.price_sats,
+            period_days: info.period_days,
+            access_mode: determine_access_mode(&state.config).to_string(),
+            relay_name: state.config.name.clone(),
+        })
+        .into_response(),
+        None => (StatusCode::NOT_FOUND, "Paywall not found").into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct CheckoutRequest {
+    npub: String,
+}
+
+#[derive(Serialize)]
+struct CheckoutResponse {
+    invoice: String,
+    payment_hash: String,
+    amount_sats: u64,
+    qr_svg: String,
+}
+
+fn generate_qr_svg(data: &str) -> String {
+    use qrcode::QrCode;
+    let code = QrCode::new(data.to_uppercase().as_bytes()).unwrap();
+    code.render::<qrcode::render::svg::Color>()
+        .quiet_zone(true)
+        .min_dimensions(256, 256)
+        .build()
+}
+
+async fn checkout_handler(
+    State(state): State<Arc<RelayState>>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    let (pm, pw_id) = match (&state.paywall_manager, &state.paywall_id) {
+        (Some(pm), Some(id)) => (pm, id),
+        _ => return (StatusCode::NOT_FOUND, "No paywall configured").into_response(),
+    };
+
+    let body = match axum::body::to_bytes(request.into_body(), 1024 * 64).await {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid body").into_response(),
+    };
+
+    let payload: CheckoutRequest = match serde_json::from_slice(&body) {
+        Ok(p) => p,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, format!("Invalid JSON: {}", e)).into_response()
+        }
+    };
+
+    // Parse npub or hex pubkey
+    let pubkey = match PublicKey::parse(&payload.npub) {
+        Ok(pk) => pk,
+        Err(_) => match PublicKey::from_str(&payload.npub) {
+            Ok(pk) => pk,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    format!("Invalid pubkey: {}", e),
+                )
+                    .into_response()
+            }
+        },
+    };
+
+    match pm.create_invoice(pw_id, pubkey).await {
+        Ok(invoice_resp) => {
+            let info = pm.get_paywall_info(pw_id).await;
+            let amount_sats = info.map(|i| i.price_sats).unwrap_or(0);
+            let qr_svg = generate_qr_svg(&invoice_resp.invoice);
+            Json(CheckoutResponse {
+                invoice: invoice_resp.invoice,
+                payment_hash: invoice_resp.payment_hash,
+                amount_sats,
+                qr_svg,
+            })
+            .into_response()
+        }
+        Err(e) => {
+            tracing::error!("Failed to create invoice: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("Failed to create invoice: {}", e) })),
+            )
+                .into_response()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct CheckoutStatusQuery {
+    payment_hash: String,
+}
+
+#[derive(Serialize)]
+struct CheckoutStatusResponse {
+    status: String,
+}
+
+async fn checkout_status_handler(
+    Query(query): Query<CheckoutStatusQuery>,
+    State(state): State<Arc<RelayState>>,
+) -> impl IntoResponse {
+    let (pm, pw_id) = match (&state.paywall_manager, &state.paywall_id) {
+        (Some(pm), Some(id)) => (pm, id),
+        _ => return (StatusCode::NOT_FOUND, "No paywall configured").into_response(),
+    };
+
+    match pm.check_payment(pw_id, &query.payment_hash).await {
+        Ok(status) => {
+            let status_str = match status {
+                crate::nwc::InvoiceStatus::Pending => "pending",
+                crate::nwc::InvoiceStatus::Paid => "paid",
+                crate::nwc::InvoiceStatus::Expired => "expired",
+            };
+            Json(CheckoutStatusResponse {
+                status: status_str.to_string(),
+            })
+            .into_response()
+        }
+        Err(e) => {
+            tracing::error!("Failed to check payment: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("Failed to check payment: {}", e) })),
+            )
+                .into_response()
+        }
+    }
+}
+
+// --- WebSocket Handler ---
 
 async fn handle_socket(socket: WebSocket, state: Arc<RelayState>) {
     let (mut sender, mut receiver) = socket.split();

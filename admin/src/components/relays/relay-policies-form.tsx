@@ -6,8 +6,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { Separator } from "@/components/ui/separator";
 import { TagInput } from "@/components/shared/tag-input";
+import { CollapsibleSection } from "@/components/ui/collapsible-section";
 import {
   Select,
   SelectContent,
@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/select";
 import { useUpdateRelay } from "@/lib/hooks/use-relays";
 import { useWots } from "@/lib/hooks/use-wot";
+import { usePaywalls } from "@/lib/hooks/use-paywalls";
 import { relayPoliciesSchema, type RelayPoliciesData } from "@/lib/utils/validation";
 import type { Relay } from "@/lib/types/relay";
 import { toast } from "sonner";
@@ -39,6 +40,7 @@ interface RelayPoliciesFormProps {
 export function RelayPoliciesForm({ relay }: RelayPoliciesFormProps) {
   const updateRelay = useUpdateRelay();
   const { data: wots } = useWots();
+  const { data: paywalls } = usePaywalls();
 
   const {
     register,
@@ -55,11 +57,13 @@ export function RelayPoliciesForm({ relay }: RelayPoliciesFormProps) {
           blocked_pubkeys: relay.policy.write.blocked_pubkeys || [],
           tagged_pubkeys: relay.policy.write.tagged_pubkeys || [],
           wot: relay.policy.write.wot || null,
+          paywall: relay.policy.write.paywall || null,
         },
         read: {
           require_auth: relay.policy.read.require_auth,
           allowed_pubkeys: relay.policy.read.allowed_pubkeys || [],
           wot: relay.policy.read.wot || null,
+          paywall: relay.policy.read.paywall || null,
         },
         events: {
           allowed_kinds: relay.policy.events.allowed_kinds || [],
@@ -81,6 +85,24 @@ export function RelayPoliciesForm({ relay }: RelayPoliciesFormProps) {
   const allowedKinds = watch("policy.events.allowed_kinds") || [];
   const blockedKinds = watch("policy.events.blocked_kinds") || [];
 
+  // Build summaries for collapsed sections
+  const writeSummary = [
+    writeAuth && "Auth required",
+    writeAllowed.length > 0 && `${writeAllowed.length} allowed`,
+    writeBlocked.length > 0 && `${writeBlocked.length} blocked`,
+    writeTagged.length > 0 && `${writeTagged.length} tagged`,
+  ].filter(Boolean).join(", ") || "Open access";
+
+  const readSummary = [
+    readAuth && "Auth required",
+    readAllowed.length > 0 && `${readAllowed.length} allowed`,
+  ].filter(Boolean).join(", ") || "Open access";
+
+  const eventSummary = [
+    allowedKinds.length > 0 && `${allowedKinds.length} allowed kinds`,
+    blockedKinds.length > 0 && `${blockedKinds.length} blocked kinds`,
+  ].filter(Boolean).join(", ") || "All events allowed";
+
   async function onSubmit(data: RelayPoliciesData) {
     const config = {
       name: relay.name,
@@ -100,6 +122,7 @@ export function RelayPoliciesForm({ relay }: RelayPoliciesFormProps) {
             ? data.policy.write.tagged_pubkeys
             : undefined,
           wot: data.policy.write.wot || undefined,
+          paywall: data.policy.write.paywall || undefined,
         },
         read: {
           require_auth: data.policy.read.require_auth,
@@ -107,6 +130,7 @@ export function RelayPoliciesForm({ relay }: RelayPoliciesFormProps) {
             ? data.policy.read.allowed_pubkeys
             : undefined,
           wot: data.policy.read.wot || undefined,
+          paywall: data.policy.read.paywall || undefined,
         },
         events: {
           allowed_kinds: data.policy.events.allowed_kinds?.length
@@ -132,12 +156,10 @@ export function RelayPoliciesForm({ relay }: RelayPoliciesFormProps) {
   }
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="space-y-8 max-w-2xl">
+    <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 max-w-2xl mx-auto">
       {/* Write Policy */}
-      <section className="space-y-4">
-        <h3 className="text-lg font-medium">Write Policy</h3>
-
-        <div className="flex items-center justify-between">
+      <CollapsibleSection title="Write Policy" summary={writeSummary} defaultOpen>
+        <div className="flex items-center justify-between rounded-md bg-muted/50 p-3">
           <Label htmlFor="write-auth">Require Authentication</Label>
           <Switch
             id="write-auth"
@@ -205,15 +227,35 @@ export function RelayPoliciesForm({ relay }: RelayPoliciesFormProps) {
             </Select>
           </div>
         )}
-      </section>
 
-      <Separator />
+        {paywalls && paywalls.length > 0 && (
+          <div className="space-y-2">
+            <Label>Paywall (write)</Label>
+            <Select
+              value={watch("policy.write.paywall") || "none"}
+              onValueChange={(v) =>
+                setValue("policy.write.paywall", v === "none" ? null : v)
+              }
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="None" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">None</SelectItem>
+                {paywalls.map((pw) => (
+                  <SelectItem key={pw.id} value={pw.id}>
+                    {pw.id} ({pw.price_sats} sats)
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+      </CollapsibleSection>
 
       {/* Read Policy */}
-      <section className="space-y-4">
-        <h3 className="text-lg font-medium">Read Policy</h3>
-
-        <div className="flex items-center justify-between">
+      <CollapsibleSection title="Read Policy" summary={readSummary}>
+        <div className="flex items-center justify-between rounded-md bg-muted/50 p-3">
           <Label htmlFor="read-auth">Require Authentication</Label>
           <Switch
             id="read-auth"
@@ -256,14 +298,34 @@ export function RelayPoliciesForm({ relay }: RelayPoliciesFormProps) {
             </Select>
           </div>
         )}
-      </section>
 
-      <Separator />
+        {paywalls && paywalls.length > 0 && (
+          <div className="space-y-2">
+            <Label>Paywall (read)</Label>
+            <Select
+              value={watch("policy.read.paywall") || "none"}
+              onValueChange={(v) =>
+                setValue("policy.read.paywall", v === "none" ? null : v)
+              }
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="None" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">None</SelectItem>
+                {paywalls.map((pw) => (
+                  <SelectItem key={pw.id} value={pw.id}>
+                    {pw.id} ({pw.price_sats} sats)
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+      </CollapsibleSection>
 
       {/* Event Policy */}
-      <section className="space-y-4">
-        <h3 className="text-lg font-medium">Event Policy</h3>
-
+      <CollapsibleSection title="Event Policy" summary={eventSummary}>
         <div className="space-y-2">
           <Label>Allowed Kinds</Label>
           <TagInput
@@ -304,13 +366,10 @@ export function RelayPoliciesForm({ relay }: RelayPoliciesFormProps) {
             />
           </div>
         </div>
-      </section>
-
-      <Separator />
+      </CollapsibleSection>
 
       {/* Rate Limit */}
-      <section className="space-y-4">
-        <h3 className="text-lg font-medium">Rate Limiting</h3>
+      <CollapsibleSection title="Rate Limiting" summary="Configure request limits">
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label htmlFor="writes_per_minute">Writes per Minute</Label>
@@ -331,11 +390,13 @@ export function RelayPoliciesForm({ relay }: RelayPoliciesFormProps) {
             />
           </div>
         </div>
-      </section>
+      </CollapsibleSection>
 
-      <Button type="submit" disabled={updateRelay.isPending}>
-        {updateRelay.isPending ? "Saving..." : "Save Policies"}
-      </Button>
+      <div className="pt-2">
+        <Button type="submit" disabled={updateRelay.isPending}>
+          {updateRelay.isPending ? "Saving..." : "Save Policies"}
+        </Button>
+      </div>
     </form>
   );
 }

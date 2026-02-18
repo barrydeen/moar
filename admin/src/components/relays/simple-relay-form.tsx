@@ -6,7 +6,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { TagInput } from "@/components/shared/tag-input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useCreateRelay } from "@/lib/hooks/use-relays";
+import { usePaywalls } from "@/lib/hooks/use-paywalls";
 import type { RelayPreset } from "./preset-selector";
 import type { RelayConfig, PolicyConfig } from "@/lib/types/relay";
 import { toast } from "sonner";
@@ -18,7 +26,7 @@ function validatePubkey(value: string): string | null {
   return null;
 }
 
-function buildPolicy(preset: RelayPreset, pubkeys: string[]): PolicyConfig {
+function buildPolicy(preset: RelayPreset, pubkeys: string[], paywallId?: string): PolicyConfig {
   const base: PolicyConfig = {
     write: { require_auth: false },
     read: { require_auth: false },
@@ -52,6 +60,12 @@ function buildPolicy(preset: RelayPreset, pubkeys: string[]): PolicyConfig {
         read: { require_auth: true, allowed_pubkeys: pubkeys },
         events: { allowed_kinds: [1059] },
       };
+    case "paywalled":
+      return {
+        ...base,
+        write: { require_auth: false, paywall: paywallId || undefined },
+        read: { require_auth: false, paywall: paywallId || undefined },
+      };
     default:
       return base;
   }
@@ -67,10 +81,12 @@ interface SimpleRelayFormProps {
 export function SimpleRelayForm({ preset, onBack }: SimpleRelayFormProps) {
   const router = useRouter();
   const createRelay = useCreateRelay();
+  const { data: paywalls } = usePaywalls();
   const [id, setId] = useState("");
   const [name, setName] = useState("");
   const [subdomain, setSubdomain] = useState("");
   const [pubkeys, setPubkeys] = useState<string[]>([]);
+  const [paywallId, setPaywallId] = useState<string>("");
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -85,11 +101,16 @@ export function SimpleRelayForm({ preset, onBack }: SimpleRelayFormProps) {
       return;
     }
 
+    if (preset === "paywalled" && !paywallId) {
+      toast.error("Select a paywall");
+      return;
+    }
+
     const config: RelayConfig = {
       name,
       subdomain,
       db_path: `/app/data/${id}.db`,
-      policy: buildPolicy(preset, pubkeys),
+      policy: buildPolicy(preset, pubkeys, paywallId),
     };
 
     try {
@@ -146,6 +167,30 @@ export function SimpleRelayForm({ preset, onBack }: SimpleRelayFormProps) {
             validate={validatePubkey}
             truncate
           />
+        </div>
+      )}
+
+      {preset === "paywalled" && (
+        <div className="space-y-2">
+          <Label>Paywall</Label>
+          {paywalls && paywalls.length > 0 ? (
+            <Select value={paywallId} onValueChange={setPaywallId}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select a paywall..." />
+              </SelectTrigger>
+              <SelectContent>
+                {paywalls.map((pw) => (
+                  <SelectItem key={pw.id} value={pw.id}>
+                    {pw.id} ({pw.price_sats} sats / {pw.period_days} days)
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              No paywalls configured. Create one in the Paywalls tab first.
+            </p>
+          )}
         </div>
       )}
 

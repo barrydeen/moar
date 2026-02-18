@@ -7,8 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { Separator } from "@/components/ui/separator";
 import { TagInput } from "@/components/shared/tag-input";
+import { CollapsibleSection } from "@/components/ui/collapsible-section";
 import { useCreateBlossom, useUpdateBlossom } from "@/lib/hooks/use-blossoms";
 import { blossomFormSchema, type BlossomFormData } from "@/lib/utils/validation";
 import type { Blossom } from "@/lib/types/blossom";
@@ -73,6 +73,15 @@ export function BlossomForm({ blossom }: BlossomFormProps) {
   const uploadPubkeys = watch("policy.upload.allowed_pubkeys") || [];
   const listPubkeys = watch("policy.list.allowed_pubkeys") || [];
 
+  const uploadSummary = uploadPubkeys.length > 0
+    ? `${uploadPubkeys.length} allowed uploaders`
+    : "Open uploads";
+
+  const listSummary = [
+    listAuth && "Auth required",
+    listPubkeys.length > 0 && `${listPubkeys.length} allowed`,
+  ].filter(Boolean).join(", ") || "Open access";
+
   async function onSubmit(data: BlossomFormData) {
     const config = {
       name: data.name,
@@ -112,10 +121,8 @@ export function BlossomForm({ blossom }: BlossomFormProps) {
   const isPending = createBlossom.isPending || updateBlossom.isPending;
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="space-y-8 max-w-2xl">
-      <section className="space-y-4">
-        <h3 className="text-lg font-medium">Basic Info</h3>
-
+    <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 max-w-2xl mx-auto">
+      <CollapsibleSection title="Basic Info" defaultOpen>
         <div className="space-y-2">
           <Label htmlFor="id">Server ID</Label>
           <Input id="id" {...register("id")} disabled={isEdit} placeholder="media" />
@@ -133,28 +140,25 @@ export function BlossomForm({ blossom }: BlossomFormProps) {
           <Input id="description" {...register("description")} placeholder="Optional description" />
         </div>
 
-        <div className="space-y-2">
-          <Label htmlFor="subdomain">Subdomain</Label>
-          <Input id="subdomain" {...register("subdomain")} placeholder="media" />
-          {errors.subdomain && (
-            <p className="text-xs text-destructive">{errors.subdomain.message}</p>
-          )}
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label htmlFor="subdomain">Subdomain</Label>
+            <Input id="subdomain" {...register("subdomain")} placeholder="media" />
+            {errors.subdomain && (
+              <p className="text-xs text-destructive">{errors.subdomain.message}</p>
+            )}
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="storage_path">Storage Path</Label>
+            <Input id="storage_path" {...register("storage_path")} placeholder="/app/data/blossom" />
+            {errors.storage_path && (
+              <p className="text-xs text-destructive">{errors.storage_path.message}</p>
+            )}
+          </div>
         </div>
+      </CollapsibleSection>
 
-        <div className="space-y-2">
-          <Label htmlFor="storage_path">Storage Path</Label>
-          <Input id="storage_path" {...register("storage_path")} placeholder="/app/data/blossom" />
-          {errors.storage_path && (
-            <p className="text-xs text-destructive">{errors.storage_path.message}</p>
-          )}
-        </div>
-      </section>
-
-      <Separator />
-
-      <section className="space-y-4">
-        <h3 className="text-lg font-medium">Upload Policy</h3>
-
+      <CollapsibleSection title="Upload Policy" summary={uploadSummary}>
         <div className="space-y-2">
           <Label>Allowed Uploaders</Label>
           <TagInput
@@ -166,14 +170,10 @@ export function BlossomForm({ blossom }: BlossomFormProps) {
           />
           <p className="text-xs text-muted-foreground">Leave empty for open uploads</p>
         </div>
-      </section>
+      </CollapsibleSection>
 
-      <Separator />
-
-      <section className="space-y-4">
-        <h3 className="text-lg font-medium">List Policy</h3>
-
-        <div className="flex items-center justify-between">
+      <CollapsibleSection title="List Policy" summary={listSummary}>
+        <div className="flex items-center justify-between rounded-md bg-muted/50 p-3">
           <Label htmlFor="list-auth">Require Authentication to List</Label>
           <Switch
             id="list-auth"
@@ -192,12 +192,9 @@ export function BlossomForm({ blossom }: BlossomFormProps) {
             truncate
           />
         </div>
-      </section>
+      </CollapsibleSection>
 
-      <Separator />
-
-      <section className="space-y-4">
-        <h3 className="text-lg font-medium">Limits</h3>
+      <CollapsibleSection title="Limits" summary="File size constraints">
         <div className="space-y-2">
           <Label htmlFor="max_file_size">Max File Size (bytes)</Label>
           <Input
@@ -207,9 +204,9 @@ export function BlossomForm({ blossom }: BlossomFormProps) {
             placeholder="No limit"
           />
         </div>
-      </section>
+      </CollapsibleSection>
 
-      <div className="flex gap-3">
+      <div className="flex gap-3 pt-2">
         <Button type="button" variant="outline" onClick={() => router.push("/admin/blossoms")}>
           Cancel
         </Button>
