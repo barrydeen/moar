@@ -14,26 +14,28 @@ import {
 import type { WotInfo, WotStatus } from "@/lib/types/wot";
 import { truncatePubkey, formatTimestamp } from "@/lib/utils/format";
 import { MoreHorizontal, Pencil, Trash2, Shield, ChevronRight } from "lucide-react";
+import { WotAvatarStack } from "@/components/wot/wot-avatar-stack";
+import { useDiscoveryRelays } from "@/lib/hooks/use-wot";
 
 function getStatusBadge(status: WotStatus) {
-  if (status === "Pending") return <Badge variant="secondary">Pending</Badge>;
-  if (status === "Ready") return <Badge variant="success">Ready</Badge>;
-  if (typeof status === "object" && "Building" in status) {
+  if (status.state === "Pending") return <Badge variant="secondary">Pending</Badge>;
+  if (status.state === "Ready") return <Badge variant="success">Ready</Badge>;
+  if (status.state === "Building") {
     return (
       <Badge variant="warning">
-        Building ({status.Building.depth_progress}/{status.Building.total_depth})
+        Building ({status.depth_progress}/{status.total_depth})
       </Badge>
     );
   }
-  if (typeof status === "object" && "Error" in status) {
+  if (status.state === "Error") {
     return <Badge variant="destructive">Error</Badge>;
   }
   return null;
 }
 
 function getErrorMessage(status: WotStatus): string | null {
-  if (typeof status === "object" && "Error" in status) {
-    return status.Error.message;
+  if (status.state === "Error") {
+    return status.message;
   }
   return null;
 }
@@ -44,7 +46,9 @@ interface WotCardProps {
 }
 
 export function WotCard({ wot, onDelete }: WotCardProps) {
+  const { data: relays } = useDiscoveryRelays();
   const errorMsg = getErrorMessage(wot.status);
+  const isReady = wot.status.state === "Ready";
 
   return (
     <Link href={`/admin/wot/${wot.id}/edit`} className="block group">
@@ -118,6 +122,9 @@ export function WotCard({ wot, onDelete }: WotCardProps) {
           )}
           {errorMsg && (
             <p className="text-xs text-destructive">{errorMsg}</p>
+          )}
+          {isReady && relays && relays.length > 0 && (
+            <WotAvatarStack seed={wot.config.seed} relays={relays} />
           )}
         </CardContent>
       </Card>
