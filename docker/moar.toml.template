@@ -8,6 +8,11 @@ discovery_relays = [
     "wss://relay.nostr.band",
 ]
 
+[wots.default]
+seed = "${ADMIN_PUBKEY}"
+depth = 2
+update_interval_hours = 24
+
 [relays.outbox]
 name = "Outbox"
 description = "My outbox relay"
@@ -35,33 +40,48 @@ tagged_pubkeys = ["${ADMIN_PUBKEY}"]
 
 [relays.inbox.policy.events]
 
+[relays.private]
+name = "Private"
+description = "Private notes — only the owner can read and write"
+subdomain = "private"
+db_path = "/app/data/private.mdb"
+
+[relays.private.policy.write]
+require_auth = true
+allowed_pubkeys = ["${ADMIN_PUBKEY}"]
+
+[relays.private.policy.read]
+require_auth = true
+allowed_pubkeys = ["${ADMIN_PUBKEY}"]
+
 [relays.dms]
 name = "DM Relay"
-description = "Private direct messages"
+description = "Private direct messages — WoT gated"
 subdomain = "dm"
 db_path = "/app/data/dm.mdb"
 
 [relays.dms.policy.write]
-require_auth = true
-allowed_pubkeys = ["${ADMIN_PUBKEY}"]
+tagged_pubkeys = ["${ADMIN_PUBKEY}"]
+wot = "default"
 
 [relays.dms.policy.read]
 require_auth = true
-allowed_pubkeys = ["${ADMIN_PUBKEY}"]
+wot = "default"
 
 [relays.dms.policy.events]
 allowed_kinds = [4, 1059, 5]
 
 [blossoms.media]
-name = "Media"
+name = "Blossom"
 description = "Blossom media server"
-subdomain = "media"
+subdomain = "blossom"
 storage_path = "/app/data/blossom/media"
 
 [blossoms.media.policy]
 max_file_size = 104857600
 
 [blossoms.media.policy.upload]
+allowed_pubkeys = ["${ADMIN_PUBKEY}"]
 
 [blossoms.media.policy.list]
 require_auth = false

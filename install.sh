@@ -390,10 +390,11 @@ box_empty
 box_line "${WHITE}${BOLD}  Your Endpoints${RESET}"
 box_empty
 box_line "  ${CYAN}Admin${RESET}   https://${MOAR_DOMAIN}:8888"
-box_line "  ${CYAN}Outbox${RESET}  wss://outbox.${MOAR_DOMAIN}/"
-box_line "  ${CYAN}Inbox${RESET}   wss://inbox.${MOAR_DOMAIN}/"
-box_line "  ${CYAN}DMs${RESET}     wss://dm.${MOAR_DOMAIN}/"
-box_line "  ${CYAN}Media${RESET}   https://media.${MOAR_DOMAIN}/"
+box_line "  ${CYAN}Outbox${RESET}   wss://outbox.${MOAR_DOMAIN}/"
+box_line "  ${CYAN}Inbox${RESET}    wss://inbox.${MOAR_DOMAIN}/"
+box_line "  ${CYAN}Private${RESET}  wss://private.${MOAR_DOMAIN}/"
+box_line "  ${CYAN}DMs${RESET}      wss://dm.${MOAR_DOMAIN}/"
+box_line "  ${CYAN}Blossom${RESET}  https://blossom.${MOAR_DOMAIN}/"
 box_empty
 box_mid
 box_empty
