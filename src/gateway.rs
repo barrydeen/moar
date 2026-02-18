@@ -114,10 +114,11 @@ pub async fn start_gateway(
 
     for (key, (blossom_config, store)) in blossoms {
         let scheme = if domain == "localhost" { "http" } else { "https" };
-        let base_url = format!(
-            "{}://{}.{}:{}",
-            scheme, blossom_config.subdomain, domain, port
-        );
+        let base_url = if domain == "localhost" {
+            format!("{}://{}.{}:{}", scheme, blossom_config.subdomain, domain, port)
+        } else {
+            format!("{}://{}.{}", scheme, blossom_config.subdomain, domain)
+        };
         let blossom_state = BlossomState {
             config: blossom_config.clone(),
             store: store.clone(),
@@ -1349,7 +1350,11 @@ async fn list_blossom_media(
                     } else {
                         "https"
                     };
-                    format!("{}://{}.{}:{}", scheme, cfg.subdomain, state.domain, state.port)
+                    if state.domain == "localhost" {
+                        format!("{}://{}.{}:{}", scheme, cfg.subdomain, state.domain, state.port)
+                    } else {
+                        format!("{}://{}.{}", scheme, cfg.subdomain, state.domain)
+                    }
                 }
                 None => String::new(),
             };
@@ -1445,7 +1450,11 @@ async fn upload_blossom_media(
                     } else {
                         "https"
                     };
-                    format!("{}://{}.{}:{}", scheme, cfg.subdomain, state.domain, state.port)
+                    if state.domain == "localhost" {
+                        format!("{}://{}.{}:{}", scheme, cfg.subdomain, state.domain, state.port)
+                    } else {
+                        format!("{}://{}.{}", scheme, cfg.subdomain, state.domain)
+                    }
                 }
                 None => String::new(),
             };
