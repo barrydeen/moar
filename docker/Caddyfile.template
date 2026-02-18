@@ -1,6 +1,16 @@
 {
     on_demand_tls {
-        ask http://server:8080/.well-known/caddy-ask
+        ask http://localhost:9999/caddy-ask-proxy
+    }
+}
+
+:9999 {
+    bind 127.0.0.1
+    handle /caddy-ask-proxy* {
+        rewrite * /.well-known/caddy-ask?{query}
+        reverse_proxy server:8080 {
+            header_up Host {http.request.uri.query.domain}
+        }
     }
 }
 
@@ -8,7 +18,9 @@
     tls {
         on_demand
     }
-    reverse_proxy server:8080
+    reverse_proxy server:8080 {
+        header_up Host {http.request.host}
+    }
 }
 
 :8888 {
@@ -16,7 +28,9 @@
         on_demand
     }
     handle /api/* {
-        reverse_proxy server:8080
+        reverse_proxy server:8080 {
+            header_up Host {http.request.host}
+        }
     }
     handle {
         reverse_proxy admin:3000
