@@ -1,9 +1,9 @@
 "use client";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Globe, Lock, Send, Inbox, MessageCircle, Settings } from "lucide-react";
+import { Globe, Lock, Send, Inbox, MessageCircle, Zap, Settings } from "lucide-react";
 
-export type RelayPreset = "public" | "private" | "outbox" | "inbox" | "dm" | "advanced";
+export type RelayPreset = "public" | "private" | "outbox" | "inbox" | "dm" | "paywalled" | "advanced";
 
 interface PresetOption {
   id: RelayPreset;
@@ -42,6 +42,12 @@ const presets: PresetOption[] = [
     name: "DM Inbox",
     description: "DM relay — accept kind 1059 events tagged to allowed pubkeys",
     icon: MessageCircle,
+  },
+  {
+    id: "paywalled",
+    name: "Paywalled",
+    description: "Users pay sats via Lightning for relay access",
+    icon: Zap,
   },
   {
     id: "advanced",

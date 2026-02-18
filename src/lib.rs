@@ -3,6 +3,8 @@ pub mod blossom;
 pub mod config;
 pub mod error;
 pub mod gateway;
+pub mod nwc;
+pub mod paywall;
 pub mod policy;
 pub mod server;
 pub mod storage;

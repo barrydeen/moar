@@ -6,6 +6,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { CollapsibleSection } from "@/components/ui/collapsible-section";
 import { useCreateWot, useUpdateWot } from "@/lib/hooks/use-wot";
 import { wotFormSchema, type WotFormData } from "@/lib/utils/validation";
 import type { WotInfo } from "@/lib/types/wot";
@@ -65,40 +66,46 @@ export function WotForm({ wot }: WotFormProps) {
   const isPending = createWot.isPending || updateWot.isPending;
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="space-y-6 max-w-xl">
-      <div className="space-y-2">
-        <Label htmlFor="id">WoT ID</Label>
-        <Input id="id" {...register("id")} disabled={isEdit} placeholder="my-wot" />
-        {errors.id && <p className="text-xs text-destructive">{errors.id.message}</p>}
-      </div>
-
-      <div className="space-y-2">
-        <Label htmlFor="seed">Seed Pubkey</Label>
-        <Input id="seed" {...register("seed")} placeholder="64-character hex pubkey" className="font-mono" />
-        {errors.seed && <p className="text-xs text-destructive">{errors.seed.message}</p>}
-        <p className="text-xs text-muted-foreground">
-          The WoT is built from this pubkey&apos;s follow list
-        </p>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4">
+    <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 max-w-2xl mx-auto">
+      <CollapsibleSection
+        title="Web of Trust Configuration"
+        description="Build a trust graph from a seed pubkey's follow list"
+        defaultOpen
+      >
         <div className="space-y-2">
-          <Label htmlFor="depth">Depth</Label>
-          <Input id="depth" type="number" {...register("depth")} min={1} max={4} />
-          {errors.depth && <p className="text-xs text-destructive">{errors.depth.message}</p>}
-          <p className="text-xs text-muted-foreground">1-4 hops from seed</p>
+          <Label htmlFor="id">WoT ID</Label>
+          <Input id="id" {...register("id")} disabled={isEdit} placeholder="my-wot" />
+          {errors.id && <p className="text-xs text-destructive">{errors.id.message}</p>}
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="update_interval_hours">Update Interval (hours)</Label>
-          <Input id="update_interval_hours" type="number" {...register("update_interval_hours")} min={1} />
-          {errors.update_interval_hours && (
-            <p className="text-xs text-destructive">{errors.update_interval_hours.message}</p>
-          )}
+          <Label htmlFor="seed">Seed Pubkey</Label>
+          <Input id="seed" {...register("seed")} placeholder="64-character hex pubkey" className="font-mono" />
+          {errors.seed && <p className="text-xs text-destructive">{errors.seed.message}</p>}
+          <p className="text-xs text-muted-foreground">
+            The WoT is built from this pubkey&apos;s follow list
+          </p>
         </div>
-      </div>
 
-      <div className="flex gap-3">
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label htmlFor="depth">Depth</Label>
+            <Input id="depth" type="number" {...register("depth")} min={1} max={4} />
+            {errors.depth && <p className="text-xs text-destructive">{errors.depth.message}</p>}
+            <p className="text-xs text-muted-foreground">1-4 hops from seed</p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="update_interval_hours">Update Interval (hours)</Label>
+            <Input id="update_interval_hours" type="number" {...register("update_interval_hours")} min={1} />
+            {errors.update_interval_hours && (
+              <p className="text-xs text-destructive">{errors.update_interval_hours.message}</p>
+            )}
+          </div>
+        </div>
+      </CollapsibleSection>
+
+      <div className="flex gap-3 pt-2">
         <Button type="button" variant="outline" onClick={() => router.push("/admin/wot")}>
           Cancel
         </Button>

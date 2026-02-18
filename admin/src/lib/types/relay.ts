@@ -9,12 +9,14 @@ export interface WritePolicy {
   blocked_pubkeys?: string[] | null;
   tagged_pubkeys?: string[] | null;
   wot?: string | null;
+  paywall?: string | null;
 }
 
 export interface ReadPolicy {
   require_auth: boolean;
   allowed_pubkeys?: string[] | null;
   wot?: string | null;
+  paywall?: string | null;
 }
 
 export interface EventPolicy {

@@ -1,6 +1,7 @@
 use moar::blossom::store::BlobStore;
 use moar::config::MoarConfig;
 use moar::gateway::start_gateway;
+use moar::paywall::PaywallManager;
 use moar::policy::PolicyEngine;
 use moar::storage::lmdb::LmdbStore;
 use moar::wot::WotManager;
@@ -44,6 +45,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             wot_manager.start_all().await;
 
+            // Create Paywall manager and start background tasks
+            let paywall_manager = PaywallManager::new(config.paywalls.clone())?;
+            paywall_manager.start_all().await;
+
             let mut processed_relays = std::collections::HashMap::new();
 
             for (key, relay_conf) in config.relays.clone() {
@@ -57,7 +62,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Some(id) => wot_manager.get_set(id).await,
                     None => None,
                 };
-                let policy = Arc::new(PolicyEngine::new(relay_conf.policy.clone(), write_wot, read_wot));
+                let write_paywall = match &relay_conf.policy.write.paywall {
+                    Some(id) => paywall_manager.get_set(id).await,
+                    None => None,
+                };
+                let read_paywall = match &relay_conf.policy.read.paywall {
+                    Some(id) => paywall_manager.get_set(id).await,
+                    None => None,
+                };
+                let policy = Arc::new(PolicyEngine::new(relay_conf.policy.clone(), write_wot, read_wot, write_paywall, read_paywall));
                 processed_relays.insert(key, (relay_conf, store, policy));
             }
 
@@ -75,6 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 config,
                 config_path,
                 wot_manager,
+                paywall_manager,
             )
             .await?;
         }

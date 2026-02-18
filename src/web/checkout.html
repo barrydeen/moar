@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{RELAY_NAME}} - Access</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0a0a;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh}
+.container{text-align:center;max-width:480px;padding:2rem;width:100%}
+h1{font-size:1.5rem;margin-bottom:0.5rem}
+.subtitle{color:#888;font-size:0.95rem;line-height:1.5;margin-bottom:1.5rem}
+.price-box{background:#1a1a2e;border:1px solid #333;border-radius:12px;padding:1.5rem;margin-bottom:1.5rem}
+.price{font-size:2rem;font-weight:700;color:#f7931a}
+.price span{font-size:1rem;color:#888;font-weight:400}
+.period{color:#888;font-size:0.85rem;margin-top:0.25rem}
+.access-mode{display:inline-block;background:#1a1a2e;border:1px solid #333;border-radius:9999px;padding:0.25rem 0.75rem;font-size:0.75rem;color:#aaa;margin-bottom:1.5rem;font-family:monospace}
+.form-group{margin-bottom:1rem;text-align:left}
+label{display:block;font-size:0.85rem;color:#888;margin-bottom:0.5rem}
+input{width:100%;padding:0.75rem;background:#111;border:1px solid #333;border-radius:8px;color:#fff;font-size:0.9rem;font-family:monospace;outline:none;transition:border-color 0.2s}
+input:focus{border-color:#f7931a}
+input::placeholder{color:#555}
+button{width:100%;padding:0.75rem;background:#f7931a;color:#000;border:none;border-radius:8px;font-size:0.95rem;font-weight:600;cursor:pointer;transition:opacity 0.2s}
+button:hover{opacity:0.9}
+button:disabled{opacity:0.5;cursor:not-allowed}
+.error{color:#ef4444;font-size:0.85rem;margin-top:0.5rem}
+.invoice-section{display:none}
+.invoice-box{background:#1a1a2e;border:1px solid #333;border-radius:12px;padding:1.5rem;margin-top:1rem;word-break:break-all}
+.qr-container{background:#fff;padding:1rem;border-radius:8px;display:inline-block;margin-bottom:1rem}
+.bolt11{font-family:monospace;font-size:0.7rem;color:#888;max-height:80px;overflow:hidden;cursor:pointer;transition:color 0.2s;user-select:all}
+.bolt11:hover{color:#aaa}
+.copy-hint{font-size:0.75rem;color:#555;margin-top:0.5rem}
+.status{margin-top:1rem;font-size:0.9rem}
+.status.pending{color:#f7931a}
+.status.paid{color:#22c55e}
+.status.expired{color:#ef4444}
+.success-section{display:none}
+.success-icon{font-size:3rem;margin-bottom:1rem}
+.success-msg{font-size:1.1rem;color:#22c55e;margin-bottom:0.5rem}
+.spinner{display:inline-block;width:16px;height:16px;border:2px solid #555;border-top-color:#f7931a;border-radius:50%;animation:spin 0.8s linear infinite;vertical-align:middle;margin-right:0.5rem}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1 id="relayName">{{RELAY_NAME}}</h1>
+  <p class="subtitle">This relay requires payment for access</p>
+
+  <div class="price-box">
+    <div class="price" id="price">{{PRICE_SATS}} <span>sats</span></div>
+    <div class="period">for <span id="period">{{PERIOD_DAYS}}</span> days of access</div>
+  </div>
+
+  <div class="access-mode">{{ACCESS_MODE}} access</div>
+
+  <!-- Step 1: Enter npub -->
+  <div id="step-npub">
+    <div class="form-group">
+      <label for="npub-input">Your npub or hex pubkey</label>
+      <input type="text" id="npub-input" placeholder="npub1... or 64-char hex" autocomplete="off" spellcheck="false">
+      <div class="error" id="npub-error"></div>
+    </div>
+    <button id="request-btn" onclick="requestInvoice()">Request Invoice</button>
+  </div>
+
+  <!-- Step 2: Pay invoice -->
+  <div class="invoice-section" id="step-invoice">
+    <div class="invoice-box">
+      <div class="qr-container" id="qr-container"></div>
+      <div class="bolt11" id="bolt11" onclick="copyInvoice()"></div>
+      <div class="copy-hint">Click to copy invoice</div>
+    </div>
+    <div class="status pending" id="payment-status">
+      <span class="spinner"></span> Waiting for payment...
+    </div>
+  </div>
+
+  <!-- Step 3: Success -->
+  <div class="success-section" id="step-success">
+    <div class="success-icon">&#9889;</div>
+    <div class="success-msg">Payment received!</div>
+    <p class="subtitle">Your access has been activated. You can now connect your Nostr client to this relay.</p>
+  </div>
+</div>
+
+<script>
+
+var currentPaymentHash = null;
+var pollTimer = null;
+
+function requestInvoice() {
+  var npub = document.getElementById('npub-input').value.trim();
+  var errEl = document.getElementById('npub-error');
+  var btn = document.getElementById('request-btn');
+
+  errEl.textContent = '';
+
+  if (!npub) {
+    errEl.textContent = 'Please enter your npub or hex pubkey';
+    return;
+  }
+
+  // Basic validation
+  if (!npub.startsWith('npub1') && !/^[0-9a-fA-F]{64}$/.test(npub)) {
+    errEl.textContent = 'Invalid format. Use npub1... or 64-char hex pubkey';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Requesting...';
+
+  fetch('/checkout', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ npub: npub })
+  })
+  .then(function(r) {
+    if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+    return r.json();
+  })
+  .then(function(data) {
+    currentPaymentHash = data.payment_hash;
+    document.getElementById('bolt11').textContent = data.invoice;
+
+    // Show server-generated QR code
+    document.getElementById('qr-container').innerHTML = data.qr_svg;
+
+    // Show invoice section, hide npub section
+    document.getElementById('step-npub').style.display = 'none';
+    document.getElementById('step-invoice').style.display = 'block';
+
+    // Start polling
+    startPolling();
+  })
+  .catch(function(err) {
+    errEl.textContent = err.message || 'Failed to create invoice';
+    btn.disabled = false;
+    btn.textContent = 'Request Invoice';
+  });
+}
+
+function copyInvoice() {
+  var bolt11 = document.getElementById('bolt11').textContent;
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(bolt11);
+  }
+}
+
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(checkStatus, 3000);
+}
+
+function checkStatus() {
+  if (!currentPaymentHash) return;
+
+  fetch('/checkout/status?payment_hash=' + encodeURIComponent(currentPaymentHash))
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    var statusEl = document.getElementById('payment-status');
+
+    if (data.status === 'paid') {
+      clearInterval(pollTimer);
+      document.getElementById('step-invoice').style.display = 'none';
+      document.getElementById('step-success').style.display = 'block';
+    } else if (data.status === 'expired') {
+      clearInterval(pollTimer);
+      statusEl.className = 'status expired';
+      statusEl.innerHTML = 'Invoice expired. Please refresh and try again.';
+    }
+  })
+  .catch(function() {
+    // Silently retry on network errors
+  });
+}
+</script>
+</body>
+</html>

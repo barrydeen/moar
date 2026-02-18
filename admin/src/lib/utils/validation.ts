@@ -28,11 +28,13 @@ export const relayFormSchema = z.object({
       blocked_pubkeys: pubkeyListSchema,
       tagged_pubkeys: pubkeyListSchema,
       wot: z.string().nullable().optional(),
+      paywall: z.string().nullable().optional(),
     }),
     read: z.object({
       require_auth: z.boolean(),
       allowed_pubkeys: pubkeyListSchema,
       wot: z.string().nullable().optional(),
+      paywall: z.string().nullable().optional(),
     }),
     events: z.object({
       allowed_kinds: kindListSchema,
@@ -85,11 +87,13 @@ export const relayPoliciesSchema = z.object({
       blocked_pubkeys: pubkeyListSchema,
       tagged_pubkeys: pubkeyListSchema,
       wot: z.string().nullable().optional(),
+      paywall: z.string().nullable().optional(),
     }),
     read: z.object({
       require_auth: z.boolean(),
       allowed_pubkeys: pubkeyListSchema,
       wot: z.string().nullable().optional(),
+      paywall: z.string().nullable().optional(),
     }),
     events: z.object({
       allowed_kinds: kindListSchema,

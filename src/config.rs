@@ -16,6 +16,8 @@ pub struct MoarConfig {
     pub discovery_relays: Vec<String>,
     #[serde(default)]
     pub wots: HashMap<String, WotConfig>,
+    #[serde(default)]
+    pub paywalls: HashMap<String, PaywallConfig>,
     pub relays: HashMap<String, RelayConfig>,
     #[serde(default)]
     pub blossoms: HashMap<String, BlossomConfig>,
@@ -40,6 +42,18 @@ fn default_update_interval() -> u64 {
 
 fn default_pages_dir() -> String {
     "pages".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaywallConfig {
+    pub nwc_string: String,
+    pub price_sats: u64,
+    #[serde(default = "default_period_days")]
+    pub period_days: u32,
+}
+
+fn default_period_days() -> u32 {
+    30
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,6 +113,8 @@ pub struct WritePolicy {
     pub tagged_pubkeys: Option<Vec<String>>,
     /// If set, only pubkeys in the referenced Web of Trust are allowed to write.
     pub wot: Option<String>,
+    /// If set, only pubkeys in the referenced paywall whitelist are allowed to write.
+    pub paywall: Option<String>,
 }
 
 impl Default for WritePolicy {
@@ -109,6 +125,7 @@ impl Default for WritePolicy {
             blocked_pubkeys: None,
             tagged_pubkeys: None,
             wot: None,
+            paywall: None,
         }
     }
 }
@@ -123,6 +140,8 @@ pub struct ReadPolicy {
     pub allowed_pubkeys: Option<Vec<String>>,
     /// If set, only pubkeys in the referenced Web of Trust are allowed to read.
     pub wot: Option<String>,
+    /// If set, only pubkeys in the referenced paywall whitelist are allowed to read.
+    pub paywall: Option<String>,
 }
 
 impl Default for ReadPolicy {
@@ -131,6 +150,7 @@ impl Default for ReadPolicy {
             require_auth: false,
             allowed_pubkeys: None,
             wot: None,
+            paywall: None,
         }
     }
 }
