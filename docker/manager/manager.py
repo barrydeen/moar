@@ -58,7 +58,7 @@ def run_update():
             write_status("building")
             result = subprocess.run(
                 [
-                    "docker", "compose",
+                    "docker", "compose", "-p", "moar",
                     "up", "-d", "--build",
                     "server", "admin", "caddy",
                 ],
