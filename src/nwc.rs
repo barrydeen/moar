@@ -1,6 +1,7 @@
 use futures_util::{SinkExt, StreamExt};
 use nostr::nips::nip47::{
-    LookupInvoiceRequestParams, MakeInvoiceRequestParams, NostrWalletConnectURI, Request, Response,
+    ListTransactionsRequestParams, LookupInvoiceRequestParams, MakeInvoiceRequestParams,
+    NostrWalletConnectURI, Request, Response, TransactionType,
 };
 use nostr::{Event, JsonUtil, Keys};
 use serde::{Deserialize, Serialize};
@@ -46,7 +47,11 @@ impl NwcClient {
         self.send_and_wait_timeout(request, 30).await
     }
 
-    async fn send_and_wait_timeout(&self, request: Request, timeout_secs: u64) -> Result<Response, anyhow::Error> {
+    async fn send_and_wait_timeout(
+        &self,
+        request: Request,
+        timeout_secs: u64,
+    ) -> Result<Response, anyhow::Error> {
         let method = format!("{:?}", request.method);
         tracing::info!(method = %method, relay = %self.uri.relay_url, "NWC: sending request");
 
@@ -93,7 +98,10 @@ impl NwcClient {
 
         tracing::debug!("NWC: EVENT sent after subscription active");
 
-        tracing::debug!(timeout_secs = timeout_secs, "NWC: subscribed, waiting for response");
+        tracing::debug!(
+            timeout_secs = timeout_secs,
+            "NWC: subscribed, waiting for response"
+        );
 
         // Wait for response
         let result = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), async {
@@ -214,10 +222,7 @@ impl NwcClient {
         })
     }
 
-    pub async fn lookup_invoice(
-        &self,
-        payment_hash: &str,
-    ) -> Result<InvoiceStatus, anyhow::Error> {
+    pub async fn lookup_invoice(&self, payment_hash: &str) -> Result<InvoiceStatus, anyhow::Error> {
         tracing::debug!(payment_hash = %payment_hash, "NWC: looking up invoice");
 
         let request = Request::lookup_invoice(LookupInvoiceRequestParams {
@@ -225,7 +230,7 @@ impl NwcClient {
             invoice: None,
         });
 
-        let response = self.send_and_wait_timeout(request, 8).await?;
+        let response = self.send_and_wait(request).await?;
 
         let result = response
             .to_lookup_invoice()
@@ -261,173 +266,89 @@ impl NwcClient {
         Ok(InvoiceStatus::Pending)
     }
 
+    pub async fn list_transactions(
+        &self,
+    ) -> Result<Vec<nostr::nips::nip47::LookupInvoiceResponseResult>, anyhow::Error> {
+        tracing::debug!("NWC: listing recent incoming transactions");
+
+        let request = Request::list_transactions(ListTransactionsRequestParams {
+            unpaid: Some(true),
+            transaction_type: Some(TransactionType::Incoming),
+            limit: Some(50),
+            ..Default::default()
+        });
+
+        let response = self.send_and_wait(request).await?;
+
+        let transactions = response
+            .to_list_transactions()
+            .map_err(|e| anyhow::anyhow!("NWC list_transactions failed: {}", e))?;
+
+        tracing::debug!(count = transactions.len(), "NWC: got transactions");
+        Ok(transactions)
+    }
+
+    /// Background polling loop that calls list_transactions to detect payment.
+    /// Sends terminal status (Paid/Expired) via status_tx, then returns.
     pub async fn subscribe_and_watch_invoice(
         &self,
         payment_hash: String,
         status_tx: tokio::sync::watch::Sender<InvoiceStatus>,
     ) -> Result<(), anyhow::Error> {
-        let max_retries = 3u32;
-        let mut attempt = 0u32;
-
-        loop {
-            match self
-                .watch_invoice_connection(&payment_hash, &status_tx)
-                .await
-            {
-                Ok(()) => return Ok(()),
-                Err(e) => {
-                    // If we already sent a terminal status, we're done
-                    if *status_tx.borrow() != InvoiceStatus::Pending {
-                        return Ok(());
-                    }
-                    attempt += 1;
-                    if attempt > max_retries {
-                        tracing::error!(
-                            payment_hash = %payment_hash,
-                            error = %e,
-                            "NWC: watch giving up after {} retries",
-                            max_retries
-                        );
-                        return Err(e);
-                    }
-                    let backoff = std::time::Duration::from_secs(2u64.pow(attempt));
-                    tracing::warn!(
-                        payment_hash = %payment_hash,
-                        attempt = attempt,
-                        backoff_secs = backoff.as_secs(),
-                        error = %e,
-                        "NWC: watch connection failed, retrying"
-                    );
-                    tokio::time::sleep(backoff).await;
-                }
-            }
-        }
-    }
-
-    async fn watch_invoice_connection(
-        &self,
-        payment_hash: &str,
-        status_tx: &tokio::sync::watch::Sender<InvoiceStatus>,
-    ) -> Result<(), anyhow::Error> {
-        tracing::info!(payment_hash = %payment_hash, "NWC: watch starting persistent connection");
-
-        let (mut ws, _) = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            tokio_tungstenite::connect_async(self.uri.relay_url.as_str()),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("Connection timeout to NWC relay"))?
-        .map_err(|e| anyhow::anyhow!("WS connect failed: {}", e))?;
-
-        let our_pk = self.keys().public_key();
-
-        // Subscribe for NWC responses (23195) and notifications (23197)
-        let sub = serde_json::json!(["REQ", "nwc-watch", {
-            "kinds": [23195, 23197],
-            "#p": [our_pk.to_hex()],
-        }]);
-        ws.send(Message::Text(sub.to_string().into())).await?;
-
-        // Send initial lookup_invoice to catch already-paid
-        self.send_lookup_on_ws(&mut ws, payment_hash).await?;
-
-        let mut poll_interval = tokio::time::interval(std::time::Duration::from_secs(15));
-        poll_interval.tick().await; // consume the immediate first tick
+        tracing::info!(payment_hash = %payment_hash, "NWC: watch started");
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3600);
 
         loop {
-            tokio::select! {
-                msg = ws.next() => {
-                    let msg = match msg {
-                        Some(Ok(m)) => m,
-                        Some(Err(e)) => return Err(anyhow::anyhow!("WS error: {}", e)),
-                        None => return Err(anyhow::anyhow!("WS connection closed")),
-                    };
-                    let text = match msg {
-                        Message::Text(t) => t.to_string(),
-                        Message::Close(_) => return Err(anyhow::anyhow!("WS closed by relay")),
-                        _ => continue,
-                    };
+            match self.list_transactions().await {
+                Ok(transactions) => {
+                    if let Some(tx) = transactions
+                        .iter()
+                        .find(|tx| tx.payment_hash == payment_hash)
+                    {
+                        if tx.settled_at.is_some() {
+                            tracing::info!(payment_hash = %payment_hash, "NWC: watch detected payment via list_transactions");
+                            let _ = status_tx.send(InvoiceStatus::Paid);
+                            return Ok(());
+                        }
 
-                    let parsed: serde_json::Value = match serde_json::from_str(&text) {
-                        Ok(v) => v,
-                        Err(_) => continue,
-                    };
-                    let arr = match parsed.as_array() {
-                        Some(a) if a.len() >= 3 && a[0].as_str() == Some("EVENT") => a,
-                        _ => continue,
-                    };
-
-                    let resp_event: Event = match Event::from_value(arr[2].clone()) {
-                        Ok(e) => e,
-                        Err(_) => continue,
-                    };
-
-                    let response = match Response::from_event(&self.uri, &resp_event) {
-                        Ok(r) => r,
-                        Err(_) => continue,
-                    };
-
-                    // Check if this response is about our payment_hash
-                    if let Ok(result) = response.to_lookup_invoice() {
-                        if result.payment_hash == payment_hash {
-                            if result.settled_at.is_some() || result.preimage.as_ref().is_some_and(|p| !p.is_empty()) {
-                                tracing::info!(payment_hash = %payment_hash, "NWC: watch detected payment");
+                        if let Some(ref preimage) = tx.preimage {
+                            if !preimage.is_empty() {
+                                tracing::info!(payment_hash = %payment_hash, "NWC: watch detected payment (has preimage) via list_transactions");
                                 let _ = status_tx.send(InvoiceStatus::Paid);
-                                let _ = ws.close(None).await;
                                 return Ok(());
                             }
-                            if let Some(expires_at) = result.expires_at {
-                                let now = std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap()
-                                    .as_secs();
-                                if now > expires_at.as_u64() {
-                                    tracing::info!(payment_hash = %payment_hash, "NWC: watch detected expiry");
-                                    let _ = status_tx.send(InvoiceStatus::Expired);
-                                    let _ = ws.close(None).await;
-                                    return Ok(());
-                                }
+                        }
+
+                        if let Some(expires_at) = tx.expires_at {
+                            let now = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_secs();
+                            if now > expires_at.as_u64() {
+                                tracing::info!(payment_hash = %payment_hash, "NWC: watch detected expiry via list_transactions");
+                                let _ = status_tx.send(InvoiceStatus::Expired);
+                                return Ok(());
                             }
                         }
+
+                        tracing::debug!(payment_hash = %payment_hash, "NWC: watch poll - found in transactions, still pending");
+                    } else {
+                        tracing::debug!(payment_hash = %payment_hash, "NWC: watch poll - not found in transactions, still pending");
                     }
                 }
-                _ = poll_interval.tick() => {
-                    tracing::debug!(payment_hash = %payment_hash, "NWC: watch re-polling");
-                    if let Err(e) = self.send_lookup_on_ws(&mut ws, payment_hash).await {
-                        tracing::warn!(error = %e, "NWC: watch re-poll send failed");
-                        return Err(e.into());
-                    }
+                Err(e) => {
+                    tracing::debug!(payment_hash = %payment_hash, error = %e, "NWC: watch poll failed, will retry");
                 }
+            }
+
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
                 _ = tokio::time::sleep_until(deadline) => {
                     tracing::info!(payment_hash = %payment_hash, "NWC: watch max lifetime reached");
-                    let _ = ws.close(None).await;
                     return Ok(());
                 }
             }
         }
-    }
-
-    async fn send_lookup_on_ws<S>(&self, ws: &mut S, payment_hash: &str) -> Result<(), anyhow::Error>
-    where
-        S: SinkExt<Message> + Unpin,
-        S::Error: std::fmt::Display,
-    {
-        let request = Request::lookup_invoice(LookupInvoiceRequestParams {
-            payment_hash: Some(payment_hash.to_string()),
-            invoice: None,
-        });
-
-        let event = request
-            .to_event(&self.uri)
-            .map_err(|e| anyhow::anyhow!("Failed to build NWC event: {}", e))?;
-
-        let event_json = event.as_json();
-        let msg = format!(r#"["EVENT",{}]"#, event_json);
-        ws.send(Message::Text(msg.into()))
-            .await
-            .map_err(|e| anyhow::anyhow!("WS send failed: {}", e))?;
-        Ok(())
     }
 
     pub async fn get_info(&self) -> Result<(), anyhow::Error> {
@@ -448,7 +369,11 @@ mod tests {
     fn parse_connection_string() {
         let conn = "nostr+walletconnect://b889ff5b1513b641e2a139f661a661364979c5beee91842f8f0ef42ab558e9d4?relay=wss%3A%2F%2Frelay.example.com&secret=71a8c14c1407c113601079c4302dab36460f0ccd0ad506f1f2dc73b5100e4f3c";
         let client = NwcClient::from_connection_string(conn).unwrap();
-        assert!(client.uri.relay_url.as_str().starts_with("wss://relay.example.com"));
+        assert!(client
+            .uri
+            .relay_url
+            .as_str()
+            .starts_with("wss://relay.example.com"));
         assert_eq!(
             client.uri.public_key.to_hex(),
             "b889ff5b1513b641e2a139f661a661364979c5beee91842f8f0ef42ab558e9d4"
