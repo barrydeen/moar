@@ -5,6 +5,7 @@ use crate::config::{BlossomConfig, MoarConfig, PaywallConfig, RelayConfig, WotCo
 use crate::paywall::PaywallManager;
 use crate::policy::PolicyEngine;
 use crate::server::{self, RelayState};
+use crate::stats::{RelayStats, SharedSystemStats, TimeSeriesRing};
 use crate::storage::NostrStore;
 use crate::wot::WotManager;
 use axum::{
@@ -40,6 +41,10 @@ pub struct GatewayState {
     pub sessions: Arc<RwLock<HashMap<String, SessionInfo>>>,
     pub wot_manager: Arc<WotManager>,
     pub paywall_manager: Arc<PaywallManager>,
+    pub relay_stats: HashMap<String, Arc<RelayStats>>,
+    pub time_series: HashMap<String, Arc<RwLock<TimeSeriesRing>>>,
+    pub system_stats: SharedSystemStats,
+    pub start_time: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -61,7 +66,7 @@ impl SessionInfo {
 pub async fn start_gateway(
     port: u16,
     domain: String,
-    relays: HashMap<String, (RelayConfig, Arc<dyn NostrStore>, Arc<PolicyEngine>)>,
+    relays: HashMap<String, (RelayConfig, Arc<dyn NostrStore>, Arc<PolicyEngine>, Arc<RelayStats>, Arc<RwLock<TimeSeriesRing>>)>,
     blossoms: HashMap<String, (BlossomConfig, Arc<BlobStore>)>,
     config: MoarConfig,
     config_path: PathBuf,
@@ -75,14 +80,21 @@ pub async fn start_gateway(
     let mut router_map = HashMap::new();
     let mut config_map = HashMap::new();
     let mut store_map: HashMap<String, Arc<dyn NostrStore>> = HashMap::new();
+    let mut stats_map: HashMap<String, Arc<RelayStats>> = HashMap::new();
+    let mut ts_map: HashMap<String, Arc<RwLock<TimeSeriesRing>>> = HashMap::new();
+    let mut bg_relay_data = Vec::new();
 
-    for (key, (relay_config, store, policy)) in relays {
+    for (key, (relay_config, store, policy, stats, ts_ring)) in relays {
         let scheme = if domain == "localhost" { "http" } else { "https" };
         let relay_url = format!(
             "{}://{}.{}",
             scheme, relay_config.subdomain, domain
         );
         store_map.insert(key.clone(), store.clone());
+        let db_path = store.db_path().to_string();
+        stats_map.insert(key.clone(), stats.clone());
+        ts_map.insert(key.clone(), ts_ring.clone());
+        bg_relay_data.push((key.clone(), stats.clone(), ts_ring.clone(), store.clone(), db_path));
 
         // Determine paywall for this relay (write and read reference the same ID)
         let paywall_id = relay_config
@@ -92,6 +104,20 @@ pub async fn start_gateway(
             .as_ref()
             .or(relay_config.policy.read.paywall.as_ref())
             .cloned();
+
+        let ip_tracker = Arc::new(crate::rate_limit::IpTracker::new());
+
+        // Spawn periodic cleanup for stale IP tracking entries
+        {
+            let tracker = ip_tracker.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+                loop {
+                    interval.tick().await;
+                    tracker.cleanup();
+                }
+            });
+        }
 
         let state = Arc::new(RelayState::new(
             relay_config.clone(),
@@ -103,6 +129,8 @@ pub async fn start_gateway(
             relay_url,
             paywall_id.as_ref().map(|_| paywall_manager.clone()),
             paywall_id,
+            stats,
+            ip_tracker,
         ));
         let app = server::create_relay_router(state);
         router_map.insert(relay_config.subdomain.clone(), app);
@@ -130,6 +158,12 @@ pub async fn start_gateway(
         blossom_store_map.insert(key, store);
     }
 
+    let system_stats = crate::stats::SharedSystemStats::default();
+    let start_time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
     let state = Arc::new(GatewayState {
         domain: domain.clone(),
         port,
@@ -145,7 +179,17 @@ pub async fn start_gateway(
         sessions: Arc::new(RwLock::new(HashMap::new())),
         wot_manager,
         paywall_manager,
+        relay_stats: stats_map,
+        time_series: ts_map,
+        system_stats: system_stats.clone(),
+        start_time,
     });
+
+    // Spawn stats background task
+    tokio::spawn(crate::stats::stats_background_loop(
+        bg_relay_data,
+        system_stats,
+    ));
 
     let app = Router::new().fallback(handler).with_state(state);
 
@@ -259,6 +303,8 @@ pub fn admin_router() -> Router<Arc<GatewayState>> {
         )
         .route("/api/paywalls/:id/verify-nwc", post(verify_nwc_handler))
         .route("/api/paywalls/:id/whitelist", get(get_paywall_whitelist))
+        .route("/api/stats", get(global_stats_handler))
+        .route("/api/stats/:relay_id", get(relay_stats_handler))
         .route("/api/restart", post(restart_handler))
         .route("/api/update", post(update_handler))
         .route("/api/update-status", get(update_status_handler))
@@ -1853,6 +1899,133 @@ async fn update_status_handler(
         }
         Err(_) => Json(serde_json::json!({"status": "idle"})).into_response(),
     }
+}
+
+// --- Stats Handlers ---
+
+use std::sync::atomic::Ordering::Relaxed;
+
+#[derive(Serialize)]
+struct RelayStatsResponse {
+    relay_id: String,
+    active_connections: i64,
+    total_connections: u64,
+    events_stored: u64,
+    events_saved: u64,
+    events_rejected: u64,
+    queries_served: u64,
+    bytes_rx: u64,
+    bytes_tx: u64,
+    storage_bytes: u64,
+}
+
+fn read_relay_stats(relay_id: &str, stats: &RelayStats) -> RelayStatsResponse {
+    RelayStatsResponse {
+        relay_id: relay_id.to_string(),
+        active_connections: stats.active_connections.load(Relaxed),
+        total_connections: stats.total_connections.load(Relaxed),
+        events_stored: stats.event_count.load(Relaxed),
+        events_saved: stats.events_saved.load(Relaxed),
+        events_rejected: stats.events_rejected.load(Relaxed),
+        queries_served: stats.queries_served.load(Relaxed),
+        bytes_rx: stats.bytes_rx.load(Relaxed),
+        bytes_tx: stats.bytes_tx.load(Relaxed),
+        storage_bytes: stats.storage_bytes.load(Relaxed),
+    }
+}
+
+#[derive(Serialize)]
+struct GlobalStatsResponse {
+    uptime_seconds: u64,
+    total_active_connections: i64,
+    total_events_stored: u64,
+    total_storage_bytes: u64,
+    total_bytes_rx: u64,
+    total_bytes_tx: u64,
+    relay_count: usize,
+    relays: Vec<RelayStatsResponse>,
+    system: crate::stats::SystemStats,
+}
+
+async fn global_stats_handler(
+    State(state): State<Arc<GatewayState>>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let mut relays = Vec::new();
+    let mut total_active: i64 = 0;
+    let mut total_events: u64 = 0;
+    let mut total_storage: u64 = 0;
+    let mut total_rx: u64 = 0;
+    let mut total_tx: u64 = 0;
+
+    for (id, stats) in &state.relay_stats {
+        let r = read_relay_stats(id, stats);
+        total_active += r.active_connections;
+        total_events += r.events_stored;
+        total_storage += r.storage_bytes;
+        total_rx += r.bytes_rx;
+        total_tx += r.bytes_tx;
+        relays.push(r);
+    }
+
+    let system = state.system_stats.read().await.clone();
+
+    Json(GlobalStatsResponse {
+        uptime_seconds: now - state.start_time,
+        total_active_connections: total_active,
+        total_events_stored: total_events,
+        total_storage_bytes: total_storage,
+        total_bytes_rx: total_rx,
+        total_bytes_tx: total_tx,
+        relay_count: relays.len(),
+        relays,
+        system,
+    })
+    .into_response()
+}
+
+#[derive(Serialize)]
+struct RelayStatsDetailResponse {
+    #[serde(flatten)]
+    stats: RelayStatsResponse,
+    history: Vec<crate::stats::TimeBucket>,
+}
+
+async fn relay_stats_handler(
+    State(state): State<Arc<GatewayState>>,
+    Path(relay_id): Path<String>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    let stats = match state.relay_stats.get(&relay_id) {
+        Some(s) => s,
+        None => return (StatusCode::NOT_FOUND, "Relay not found").into_response(),
+    };
+
+    let r = read_relay_stats(&relay_id, stats);
+
+    let history = match state.time_series.get(&relay_id) {
+        Some(ts) => ts.read().await.entries(),
+        None => Vec::new(),
+    };
+
+    Json(RelayStatsDetailResponse {
+        stats: r,
+        history,
+    })
+    .into_response()
 }
 
 // --- Caddy On-Demand TLS ---

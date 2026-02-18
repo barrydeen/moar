@@ -21,7 +21,12 @@ use tower_http::cors::{Any, CorsLayer};
 use crate::config::RelayConfig;
 use crate::paywall::PaywallManager;
 use crate::policy::{PolicyEngine, PolicyResult};
+use crate::rate_limit::IpTracker;
+use crate::stats::RelayStats;
 use crate::storage::NostrStore;
+use std::collections::HashSet;
+use std::net::IpAddr;
+use std::sync::atomic::Ordering::Relaxed;
 
 pub struct RelayState {
     pub store: Arc<dyn NostrStore>,
@@ -34,6 +39,8 @@ pub struct RelayState {
     pub tx: broadcast::Sender<Event>,
     pub paywall_manager: Option<Arc<PaywallManager>>,
     pub paywall_id: Option<String>,
+    pub stats: Arc<RelayStats>,
+    pub ip_tracker: Arc<IpTracker>,
 }
 
 impl RelayState {
@@ -47,6 +54,8 @@ impl RelayState {
         relay_url: String,
         paywall_manager: Option<Arc<PaywallManager>>,
         paywall_id: Option<String>,
+        stats: Arc<RelayStats>,
+        ip_tracker: Arc<IpTracker>,
     ) -> Self {
         let (tx, _rx) = broadcast::channel(100);
         Self {
@@ -60,6 +69,8 @@ impl RelayState {
             tx,
             paywall_manager,
             paywall_id,
+            stats,
+            ip_tracker,
         }
     }
 }
@@ -104,9 +115,18 @@ async fn root_handler(
         }
     }
 
+    // Extract client IP from X-Forwarded-For header or fall back to loopback
+    let client_ip = extract_client_ip(&headers);
+
     // WebSocket upgrade takes priority
     if let Some(ws) = ws {
-        return ws.on_upgrade(|socket| handle_socket(socket, state)).into_response();
+        // Enforce per-IP connection limit
+        let max_conn = state.config.policy.rate_limit.max_connections;
+        if !state.ip_tracker.try_connect(client_ip, max_conn) {
+            return (StatusCode::SERVICE_UNAVAILABLE, "too many connections from your IP").into_response();
+        }
+        let ip = client_ip;
+        return ws.on_upgrade(move |socket| handle_socket(socket, state, ip)).into_response();
     }
 
     // Serve custom home page if it exists
@@ -165,6 +185,22 @@ p{{color:#888;font-size:0.95rem;line-height:1.5}}
     );
 
     Html(html).into_response()
+}
+
+/// Extract client IP from X-Forwarded-For header, falling back to loopback.
+fn extract_client_ip(headers: &HeaderMap) -> IpAddr {
+    if let Some(xff) = headers.get("x-forwarded-for") {
+        if let Ok(xff_str) = xff.to_str() {
+            // Take the first (leftmost) IP — the original client
+            if let Some(first) = xff_str.split(',').next() {
+                if let Ok(ip) = first.trim().parse::<IpAddr>() {
+                    return ip;
+                }
+            }
+        }
+    }
+    // Fallback — peer address not available in this handler, use loopback
+    IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
 }
 
 fn html_escape(s: &str) -> String {
@@ -437,11 +473,53 @@ async fn checkout_status_handler(
 
 // --- WebSocket Handler ---
 
-async fn handle_socket(socket: WebSocket, state: Arc<RelayState>) {
+struct ConnectionGuard {
+    stats: Arc<RelayStats>,
+    ip_tracker: Arc<IpTracker>,
+    ip: IpAddr,
+}
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        self.stats.active_connections.fetch_sub(1, Relaxed);
+        self.ip_tracker.disconnect(self.ip);
+    }
+}
+
+async fn send_msg(sender: &mut futures::stream::SplitSink<WebSocket, Message>, msg: String, stats: &RelayStats) {
+    stats.bytes_tx.fetch_add(msg.len() as u64, Relaxed);
+    let _ = sender.send(Message::Text(msg.into())).await;
+}
+
+async fn handle_socket(socket: WebSocket, state: Arc<RelayState>, client_ip: IpAddr) {
     let (mut sender, mut receiver) = socket.split();
+
+    let stats = &state.stats;
+    stats.active_connections.fetch_add(1, Relaxed);
+    stats.total_connections.fetch_add(1, Relaxed);
+    let _guard = ConnectionGuard {
+        stats: stats.clone(),
+        ip_tracker: state.ip_tracker.clone(),
+        ip: client_ip,
+    };
+
+    let nip11 = &state.config.nip11;
+    let rate_limit = &state.config.policy.rate_limit;
+
+    // NIP-11: max_message_length for raw text check
+    let max_message_length = nip11.max_message_length.unwrap_or(524288) as usize;
+
+    // NIP-11: subscription limits (per-connection)
+    let max_subscriptions = nip11.max_subscriptions.unwrap_or(20) as usize;
+    let max_subid_length = nip11.max_subid_length.unwrap_or(64) as usize;
+    let max_limit = nip11.max_limit;
+    let default_limit = nip11.default_limit;
 
     // NIP-42: the authenticated pubkey for this connection (None until AUTH)
     let authed_pubkey: Option<nostr::PublicKey> = None;
+
+    // Track active subscriptions for this connection
+    let mut active_subs: HashSet<String> = HashSet::new();
 
     let mut broadcast_rx = state.tx.subscribe();
 
@@ -450,42 +528,84 @@ async fn handle_socket(socket: WebSocket, state: Arc<RelayState>) {
             Some(msg) = receiver.next() => {
                 match msg {
                     Ok(Message::Text(text)) => {
+                        stats.bytes_rx.fetch_add(text.len() as u64, Relaxed);
+
+                        // NIP-11: max_message_length check before parsing
+                        if text.len() > max_message_length {
+                            send_msg(&mut sender, RelayMessage::notice(
+                                format!("message too large ({} > {})", text.len(), max_message_length)
+                            ).as_json(), stats).await;
+                            continue;
+                        }
+
                         match ClientMessage::from_json(&text) {
                             Ok(client_msg) => {
                                 match client_msg {
                                     ClientMessage::Event(event) => {
+                                        // Per-IP write rate limit
+                                        if !state.ip_tracker.check_write_rate(client_ip, rate_limit.writes_per_minute) {
+                                            send_msg(&mut sender, RelayMessage::ok(event.id, false, "rate-limited: too many writes per minute").as_json(), stats).await;
+                                            continue;
+                                        }
+
                                         match state.policy.can_write(&event, authed_pubkey.as_ref()) {
                                             PolicyResult::Allow => {
                                                 if let Err(e) = state.store.save_event(&event) {
                                                     tracing::error!("Failed to save event: {}", e);
-                                                    let _ = sender.send(Message::Text(RelayMessage::ok(event.id, false, "error saving").as_json().into())).await;
+                                                    send_msg(&mut sender, RelayMessage::ok(event.id, false, "error saving").as_json(), stats).await;
                                                 } else {
-                                                    let _ = sender.send(Message::Text(RelayMessage::ok(event.id, true, "").as_json().into())).await;
+                                                    stats.events_saved.fetch_add(1, Relaxed);
+                                                    send_msg(&mut sender, RelayMessage::ok(event.id, true, "").as_json(), stats).await;
                                                     let _ = state.tx.send(event.as_ref().clone());
                                                 }
                                             }
                                             PolicyResult::Deny(reason) => {
-                                                let _ = sender.send(Message::Text(RelayMessage::ok(event.id, false, &format!("blocked: {}", reason)).as_json().into())).await;
+                                                stats.events_rejected.fetch_add(1, Relaxed);
+                                                send_msg(&mut sender, RelayMessage::ok(event.id, false, &format!("blocked: {}", reason)).as_json(), stats).await;
                                             }
                                             PolicyResult::AuthRequired => {
-                                                let _ = sender.send(Message::Text(RelayMessage::ok(event.id, false, "auth-required: NIP-42 authentication required").as_json().into())).await;
+                                                send_msg(&mut sender, RelayMessage::ok(event.id, false, "auth-required: NIP-42 authentication required").as_json(), stats).await;
                                                 // TODO: send AUTH challenge
                                             }
                                         }
                                     }
                                     ClientMessage::Req { subscription_id, filters } => {
+                                        let sub_id_str = subscription_id.to_string();
+
+                                        // NIP-11: max_subid_length
+                                        if sub_id_str.len() > max_subid_length {
+                                            send_msg(&mut sender, RelayMessage::notice(
+                                                format!("subscription ID too long ({} > {})", sub_id_str.len(), max_subid_length)
+                                            ).as_json(), stats).await;
+                                            continue;
+                                        }
+
+                                        // NIP-11: max_subscriptions (only count genuinely new subs)
+                                        if !active_subs.contains(&sub_id_str) && active_subs.len() >= max_subscriptions {
+                                            send_msg(&mut sender, RelayMessage::notice(
+                                                format!("too many subscriptions ({} max)", max_subscriptions)
+                                            ).as_json(), stats).await;
+                                            continue;
+                                        }
+
+                                        // Per-IP read rate limit
+                                        if !state.ip_tracker.check_read_rate(client_ip, rate_limit.reads_per_minute) {
+                                            send_msg(&mut sender, RelayMessage::notice("rate-limited: too many reads per minute").as_json(), stats).await;
+                                            continue;
+                                        }
+
                                         // Check read policy on each filter
                                         let mut blocked = false;
                                         for filter in &filters {
                                             match state.policy.can_read(filter, authed_pubkey.as_ref()) {
                                                 PolicyResult::Allow => {}
                                                 PolicyResult::Deny(reason) => {
-                                                    let _ = sender.send(Message::Text(RelayMessage::notice(format!("blocked: {}", reason)).as_json().into())).await;
+                                                    send_msg(&mut sender, RelayMessage::notice(format!("blocked: {}", reason)).as_json(), stats).await;
                                                     blocked = true;
                                                     break;
                                                 }
                                                 PolicyResult::AuthRequired => {
-                                                    let _ = sender.send(Message::Text(RelayMessage::notice("auth-required: NIP-42 authentication required").as_json().into())).await;
+                                                    send_msg(&mut sender, RelayMessage::notice("auth-required: NIP-42 authentication required").as_json(), stats).await;
                                                     blocked = true;
                                                     break;
                                                 }
@@ -493,24 +613,44 @@ async fn handle_socket(socket: WebSocket, state: Arc<RelayState>) {
                                         }
 
                                         if !blocked {
+                                            active_subs.insert(sub_id_str);
+
                                             for filter in filters {
-                                                match state.store.query(&filter) {
+                                                // NIP-11: clamp filter limit
+                                                let mut clamped_filter = filter;
+                                                match clamped_filter.limit {
+                                                    Some(l) => {
+                                                        if let Some(max) = max_limit {
+                                                            if l as u64 > max {
+                                                                clamped_filter.limit = Some(max as usize);
+                                                            }
+                                                        }
+                                                    }
+                                                    None => {
+                                                        if let Some(def) = default_limit {
+                                                            clamped_filter.limit = Some(def as usize);
+                                                        }
+                                                    }
+                                                }
+
+                                                match state.store.query(&clamped_filter) {
                                                     Ok(events) => {
+                                                        stats.queries_served.fetch_add(1, Relaxed);
                                                         for event in events {
-                                                            let _ = sender.send(Message::Text(RelayMessage::event(subscription_id.clone(), event).as_json().into())).await;
+                                                            send_msg(&mut sender, RelayMessage::event(subscription_id.clone(), event).as_json(), stats).await;
                                                         }
                                                     }
                                                     Err(e) => {
                                                         tracing::error!("Query failed: {}", e);
-                                                        let _ = sender.send(Message::Text(RelayMessage::notice(format!("error: {}", e)).as_json().into())).await;
+                                                        send_msg(&mut sender, RelayMessage::notice(format!("error: {}", e)).as_json(), stats).await;
                                                     }
                                                 }
                                             }
-                                            let _ = sender.send(Message::Text(RelayMessage::eose(subscription_id).as_json().into())).await;
+                                            send_msg(&mut sender, RelayMessage::eose(subscription_id).as_json(), stats).await;
                                         }
                                     }
-                                    ClientMessage::Close(_sub_id) => {
-                                        // subscriptions.remove(&sub_id);
+                                    ClientMessage::Close(sub_id) => {
+                                        active_subs.remove(&sub_id.to_string());
                                     }
                                     _ => {}
                                 }

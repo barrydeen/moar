@@ -6,7 +6,7 @@ services:
     environment:
       - MOAR_DOMAIN=localhost
       - ADMIN_PUBKEY=${ADMIN_PUBKEY}
-      - RUST_LOG=${RUST_LOG:-info}
+      - RUST_LOG=debug
       - MANAGER_SECRET=${MANAGER_SECRET:-dev-manager-secret}
     volumes:
       - ./data:/app/data
@@ -18,11 +18,16 @@ services:
       - moar
 
   admin:
-    build:
-      context: ./admin
-      dockerfile: Dockerfile
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev"
     environment:
-      - NODE_ENV=production
+      - NODE_ENV=development
+      - WATCHPACK_POLLING=true
+    volumes:
+      - ./admin:/app
+      - admin_node_modules:/app/node_modules
+      - /app/.next
     restart: unless-stopped
     networks:
       - moar
@@ -54,6 +59,8 @@ services:
 
 volumes:
   manager_status:
+  admin_node_modules:
+
 
 networks:
   moar:

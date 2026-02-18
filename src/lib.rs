@@ -6,6 +6,8 @@ pub mod gateway;
 pub mod nwc;
 pub mod paywall;
 pub mod policy;
+pub mod rate_limit;
 pub mod server;
+pub mod stats;
 pub mod storage;
 pub mod wot;

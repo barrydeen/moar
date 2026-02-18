@@ -1,6 +1,7 @@
 export interface RateLimitConfig {
   writes_per_minute?: number | null;
   reads_per_minute?: number | null;
+  max_connections?: number | null;
 }
 
 export interface WritePolicy {

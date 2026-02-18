@@ -142,7 +142,7 @@ export function RelayNip11Form({ relay, relayId }: RelayNip11FormProps) {
         <section className="space-y-4">
           <h3 className="text-lg font-medium">Relay Limits</h3>
           <p className="text-sm text-muted-foreground">
-            Optional NIP-11 limit values advertised to clients.
+            NIP-11 limit values advertised to clients and enforced by the relay.
           </p>
 
           <div className="grid grid-cols-2 gap-4">
@@ -152,7 +152,7 @@ export function RelayNip11Form({ relay, relayId }: RelayNip11FormProps) {
                 id="max_message_length"
                 type="number"
                 {...register("nip11.max_message_length")}
-                placeholder="No limit"
+                placeholder="Default: 524288"
               />
             </div>
             <div className="space-y-2">
@@ -161,7 +161,7 @@ export function RelayNip11Form({ relay, relayId }: RelayNip11FormProps) {
                 id="max_subscriptions"
                 type="number"
                 {...register("nip11.max_subscriptions")}
-                placeholder="No limit"
+                placeholder="Default: 20"
               />
             </div>
           </div>
@@ -173,7 +173,7 @@ export function RelayNip11Form({ relay, relayId }: RelayNip11FormProps) {
                 id="max_subid_length"
                 type="number"
                 {...register("nip11.max_subid_length")}
-                placeholder="No limit"
+                placeholder="Default: 64"
               />
             </div>
             <div className="space-y-2">
@@ -182,7 +182,7 @@ export function RelayNip11Form({ relay, relayId }: RelayNip11FormProps) {
                 id="max_limit"
                 type="number"
                 {...register("nip11.max_limit")}
-                placeholder="No limit"
+                placeholder="Default: 5000"
               />
             </div>
           </div>
@@ -194,7 +194,7 @@ export function RelayNip11Form({ relay, relayId }: RelayNip11FormProps) {
                 id="max_event_tags"
                 type="number"
                 {...register("nip11.max_event_tags")}
-                placeholder="No limit"
+                placeholder="Default: 2500"
               />
             </div>
             <div className="space-y-2">
@@ -203,7 +203,7 @@ export function RelayNip11Form({ relay, relayId }: RelayNip11FormProps) {
                 id="default_limit"
                 type="number"
                 {...register("nip11.default_limit")}
-                placeholder="No limit"
+                placeholder="Default: 100"
               />
             </div>
           </div>
@@ -215,9 +215,9 @@ export function RelayNip11Form({ relay, relayId }: RelayNip11FormProps) {
                 id="created_at_lower_limit"
                 type="number"
                 {...register("nip11.created_at_lower_limit")}
-                placeholder="No limit"
+                placeholder="Default: 94608000"
               />
-              <p className="text-xs text-muted-foreground">Seconds before current time</p>
+              <p className="text-xs text-muted-foreground">Seconds before current time (default: ~3 years)</p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="created_at_upper_limit">Created At Upper Limit</Label>
@@ -225,9 +225,9 @@ export function RelayNip11Form({ relay, relayId }: RelayNip11FormProps) {
                 id="created_at_upper_limit"
                 type="number"
                 {...register("nip11.created_at_upper_limit")}
-                placeholder="No limit"
+                placeholder="Default: 900"
               />
-              <p className="text-xs text-muted-foreground">Seconds after current time</p>
+              <p className="text-xs text-muted-foreground">Seconds after current time (default: 15 min)</p>
             </div>
           </div>
         </section>
