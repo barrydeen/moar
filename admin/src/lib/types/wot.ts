@@ -5,10 +5,10 @@ export interface WotConfig {
 }
 
 export type WotStatus =
-  | "Pending"
-  | { Building: { depth_progress: number; total_depth: number } }
-  | "Ready"
-  | { Error: { message: string } };
+  | { state: "Pending" }
+  | { state: "Building"; depth_progress: number; total_depth: number }
+  | { state: "Ready" }
+  | { state: "Error"; message: string };
 
 export interface WotInfo {
   id: string;
