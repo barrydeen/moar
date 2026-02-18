@@ -2,8 +2,10 @@
 
 import { use } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Separator } from "@/components/ui/separator";
 import { WotForm } from "@/components/wot/wot-form";
-import { useWot } from "@/lib/hooks/use-wot";
+import { WotFollows } from "@/components/wot/wot-follows";
+import { useWot, useDiscoveryRelays } from "@/lib/hooks/use-wot";
 
 export default function EditWotPage({
   params,
@@ -12,6 +14,7 @@ export default function EditWotPage({
 }) {
   const { id } = use(params);
   const { data: wot, isLoading } = useWot(id);
+  const { data: discoveryRelays } = useDiscoveryRelays();
 
   if (isLoading) {
     return (
@@ -32,6 +35,13 @@ export default function EditWotPage({
         <h2 className="text-2xl font-bold tracking-tight">Edit WoT: {wot.id}</h2>
       </div>
       <WotForm wot={wot} />
+
+      {discoveryRelays && discoveryRelays.length > 0 && (
+        <>
+          <Separator />
+          <WotFollows wot={wot} relays={discoveryRelays} />
+        </>
+      )}
     </div>
   );
 }

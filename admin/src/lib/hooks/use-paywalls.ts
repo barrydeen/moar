@@ -7,6 +7,9 @@ import {
   deletePaywall,
   getPaywallWhitelist,
 } from "../api/paywalls";
+import { fetchProfiles } from "@/lib/nostr/pool";
+import type { NostrProfile } from "@/lib/types/nostr";
+import type { WhitelistEntry } from "@/lib/types/paywall";
 
 export function usePaywalls() {
   return useQuery({
@@ -70,5 +73,25 @@ export function usePaywallWhitelist(id: string) {
     queryKey: ["paywalls", id, "whitelist"],
     queryFn: () => getPaywallWhitelist(id),
     enabled: !!id,
+  });
+}
+
+export function usePaywallWhitelistProfiles(id: string, relays: string[]) {
+  return useQuery({
+    queryKey: ["paywalls", id, "whitelist-profiles", relays],
+    queryFn: async (): Promise<{
+      entries: WhitelistEntry[];
+      profiles: Map<string, NostrProfile>;
+    }> => {
+      const entries = await getPaywallWhitelist(id);
+      const pubkeys = entries.map((e) => e.pubkey);
+      const profiles =
+        pubkeys.length > 0 && relays.length > 0
+          ? await fetchProfiles(relays, pubkeys)
+          : new Map<string, NostrProfile>();
+      return { entries, profiles };
+    },
+    enabled: !!id && relays.length > 0,
+    staleTime: 5 * 60 * 1000,
   });
 }

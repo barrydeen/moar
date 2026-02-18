@@ -13,6 +13,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { PaywallInfo } from "@/lib/types/paywall";
 import { MoreHorizontal, Pencil, Trash2, Zap, ChevronRight } from "lucide-react";
+import { PaywallAvatarStack } from "@/components/paywalls/paywall-avatar-stack";
+import { useDiscoveryRelays } from "@/lib/hooks/use-wot";
 
 interface PaywallCardProps {
   paywall: PaywallInfo;
@@ -20,6 +22,8 @@ interface PaywallCardProps {
 }
 
 export function PaywallCard({ paywall, onDelete }: PaywallCardProps) {
+  const { data: relays } = useDiscoveryRelays();
+
   return (
     <Link href={`/admin/paywalls/${paywall.id}/edit`} className="block group">
       <Card className="border-l-2 border-l-primary/70 transition-all group-hover:border-primary/50 group-hover:shadow-md group-hover:-translate-y-0.5">
@@ -83,6 +87,9 @@ export function PaywallCard({ paywall, onDelete }: PaywallCardProps) {
             <span>Period: {paywall.period_days} days</span>
             <span>Whitelisted: {paywall.whitelist_count}</span>
           </div>
+          {paywall.whitelist_count > 0 && relays && relays.length > 0 && (
+            <PaywallAvatarStack paywallId={paywall.id} relays={relays} />
+          )}
         </CardContent>
       </Card>
     </Link>
