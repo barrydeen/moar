@@ -55,6 +55,16 @@ export function exportRelayUrl(id: string): string {
   return `/api/relays/${id}/export`;
 }
 
+export async function deleteEvent(relayId: string, eventId: string): Promise<void> {
+  return apiFetch<void>(`/relays/${relayId}/events/${eventId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function fetchOgTags(url: string): Promise<{ title?: string; description?: string; image?: string }> {
+  return apiFetch(`/og?url=${encodeURIComponent(url)}`);
+}
+
 export async function importRelay(id: string, file: File): Promise<ImportResult> {
   const formData = new FormData();
   formData.append("file", file);

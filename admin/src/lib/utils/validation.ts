@@ -162,3 +162,27 @@ export const wotFormSchema = z.object({
 });
 
 export type WotFormData = z.infer<typeof wotFormSchema>;
+
+export const syncFormSchema = z
+  .object({
+    id: idSchema,
+    relay: z.string().min(1, "Target relay is required"),
+    remote_relays: z.string().min(1, "At least one remote relay URL is required"),
+    interval_minutes: z.coerce.number().int().min(1),
+    author_mode: z.enum(["none", "static", "wot"]),
+    authors: z.string().optional(),
+    authors_from_wot: z.string().optional(),
+    kinds: z.string().optional(),
+    tags_json: z.string().optional(),
+    limit: z.coerce.number().int().min(1).nullable().optional(),
+  })
+  .refine(
+    (data) => {
+      if (data.author_mode === "static") return !!data.authors?.trim();
+      if (data.author_mode === "wot") return !!data.authors_from_wot?.trim();
+      return true;
+    },
+    { message: "Authors are required for the selected mode", path: ["authors"] }
+  );
+
+export type SyncFormData = z.infer<typeof syncFormSchema>;

@@ -1,12 +1,13 @@
 use crate::auth::verify_auth_event;
 use crate::blossom::handlers::{self as blossom_handlers, BlossomState};
 use crate::blossom::store::BlobStore;
-use crate::config::{BlossomConfig, MoarConfig, PaywallConfig, RelayConfig, WotConfig};
+use crate::config::{BlossomConfig, MoarConfig, PaywallConfig, RelayConfig, SyncConfig, WotConfig};
 use crate::paywall::PaywallManager;
 use crate::policy::PolicyEngine;
 use crate::server::{self, RelayState};
 use crate::stats::{RelayStats, SharedSystemStats, TimeSeriesRing};
 use crate::storage::NostrStore;
+use crate::sync::SyncManager;
 use crate::wot::WotManager;
 use axum::{
     body::Body,
@@ -41,6 +42,7 @@ pub struct GatewayState {
     pub sessions: Arc<RwLock<HashMap<String, SessionInfo>>>,
     pub wot_manager: Arc<WotManager>,
     pub paywall_manager: Arc<PaywallManager>,
+    pub sync_manager: Arc<SyncManager>,
     pub relay_stats: HashMap<String, Arc<RelayStats>>,
     pub time_series: HashMap<String, Arc<RwLock<TimeSeriesRing>>>,
     pub system_stats: SharedSystemStats,
@@ -72,6 +74,7 @@ pub async fn start_gateway(
     config_path: PathBuf,
     wot_manager: Arc<WotManager>,
     paywall_manager: Arc<PaywallManager>,
+    sync_manager: Arc<SyncManager>,
 ) -> crate::error::Result<()> {
     let pages_dir = PathBuf::from(&config.pages_dir);
     // Ensure the pages directory exists
@@ -179,6 +182,7 @@ pub async fn start_gateway(
         sessions: Arc::new(RwLock::new(HashMap::new())),
         wot_manager,
         paywall_manager,
+        sync_manager,
         relay_stats: stats_map,
         time_series: ts_map,
         system_stats: system_stats.clone(),
@@ -276,6 +280,7 @@ pub fn admin_router() -> Router<Arc<GatewayState>> {
             "/api/relays/:id/page",
             get(get_relay_page).put(put_relay_page).delete(delete_relay_page),
         )
+        .route("/api/relays/:id/events/:event_id", delete_route(delete_event_handler))
         .route("/api/relays/:id/export", get(export_relay))
         .route("/api/relays/:id/import", post(import_relay))
         .route("/api/wots", get(list_wots).post(create_wot))
@@ -303,6 +308,13 @@ pub fn admin_router() -> Router<Arc<GatewayState>> {
         )
         .route("/api/paywalls/:id/verify-nwc", post(verify_nwc_handler))
         .route("/api/paywalls/:id/whitelist", get(get_paywall_whitelist))
+        .route("/api/syncs", get(list_syncs).post(create_sync))
+        .route(
+            "/api/syncs/:id",
+            get(get_sync).put(update_sync).delete(delete_sync),
+        )
+        .route("/api/syncs/:id/trigger", post(trigger_sync))
+        .route("/api/og", get(og_proxy_handler))
         .route("/api/stats", get(global_stats_handler))
         .route("/api/stats/:relay_id", get(relay_stats_handler))
         .route("/api/restart", post(restart_handler))
@@ -778,6 +790,110 @@ async fn delete_relay_page(
 
 // --- Relay Import/Export Handlers ---
 
+// --- Delete Event ---
+
+async fn delete_event_handler(
+    State(state): State<Arc<GatewayState>>,
+    Path((id, event_id)): Path<(String, String)>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    let store = match state.relay_stores.get(&id) {
+        Some(s) => s.clone(),
+        None => return (StatusCode::NOT_FOUND, "Relay not found").into_response(),
+    };
+
+    // Parse hex event ID into 32-byte array via nostr::EventId
+    let id_bytes: [u8; 32] = match nostr::EventId::from_hex(&event_id) {
+        Ok(eid) => *eid.as_bytes(),
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid event ID").into_response(),
+    };
+
+    match store.delete_event(&id_bytes) {
+        Ok(true) => (StatusCode::OK, "Deleted").into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "Event not found").into_response(),
+        Err(e) => {
+            tracing::error!("Failed to delete event: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Delete failed").into_response()
+        }
+    }
+}
+
+// --- OG Tag Proxy ---
+
+#[derive(Deserialize)]
+struct OgQuery {
+    url: String,
+}
+
+#[derive(Serialize)]
+struct OgResult {
+    title: Option<String>,
+    description: Option<String>,
+    image: Option<String>,
+}
+
+async fn og_proxy_handler(
+    State(state): State<Arc<GatewayState>>,
+    Query(query): Query<OgQuery>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    // Basic URL validation
+    if !query.url.starts_with("http://") && !query.url.starts_with("https://") {
+        return (StatusCode::BAD_REQUEST, Json(OgResult { title: None, description: None, image: None })).into_response();
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::limited(3))
+        .build()
+        .unwrap();
+
+    let html = match client.get(&query.url).header("User-Agent", "Mozilla/5.0 (compatible; MOAR/1.0)").send().await {
+        Ok(resp) => match resp.text().await {
+            Ok(text) => text,
+            Err(_) => return Json(OgResult { title: None, description: None, image: None }).into_response(),
+        },
+        Err(_) => return Json(OgResult { title: None, description: None, image: None }).into_response(),
+    };
+
+    fn extract_og_tag(html: &str, property: &str) -> Option<String> {
+        for pattern in &[
+            format!("property=\"og:{}\"", property),
+            format!("property='og:{}'", property),
+        ] {
+            if let Some(pos) = html.find(pattern.as_str()) {
+                let meta_start = html[..pos].rfind("<meta").unwrap_or(pos);
+                let meta_end = html[meta_start..].find('>').map(|p| meta_start + p).unwrap_or(html.len());
+                let meta_tag = &html[meta_start..meta_end];
+                if let Some(content_pos) = meta_tag.find("content=\"").or_else(|| meta_tag.find("content='")) {
+                    let quote = meta_tag.as_bytes()[content_pos + 8] as char;
+                    let offset = content_pos + 9;
+                    if let Some(end) = meta_tag[offset..].find(quote) {
+                        return Some(meta_tag[offset..offset + end].to_string());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    let result = OgResult {
+        title: extract_og_tag(&html, "title"),
+        description: extract_og_tag(&html, "description"),
+        image: extract_og_tag(&html, "image"),
+    };
+
+    Json(result).into_response()
+}
+
 async fn export_relay(
     State(state): State<Arc<GatewayState>>,
     Path(id): Path<String>,
@@ -1103,6 +1219,283 @@ async fn delete_wot(
     }
 
     StatusCode::NO_CONTENT.into_response()
+}
+
+// --- Sync Handlers ---
+
+async fn list_syncs(
+    State(state): State<Arc<GatewayState>>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    let syncs = state.sync_manager.list_syncs().await;
+    Json(syncs).into_response()
+}
+
+async fn get_sync(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    match state.sync_manager.get_sync(&id).await {
+        Some(sync) => Json(sync).into_response(),
+        None => (StatusCode::NOT_FOUND, "Sync not found").into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct CreateSyncRequest {
+    id: String,
+    relay: String,
+    remote_relays: Vec<String>,
+    #[serde(default = "default_sync_interval_api")]
+    interval_minutes: u64,
+    #[serde(default)]
+    authors: Option<Vec<String>>,
+    #[serde(default)]
+    authors_from_wot: Option<String>,
+    #[serde(default)]
+    kinds: Option<Vec<u64>>,
+    #[serde(default)]
+    tags: Option<HashMap<String, Vec<String>>>,
+    #[serde(default = "default_sync_limit_api")]
+    limit: Option<usize>,
+}
+
+fn default_sync_interval_api() -> u64 { 60 }
+fn default_sync_limit_api() -> Option<usize> { Some(500) }
+
+async fn create_sync(
+    State(state): State<Arc<GatewayState>>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    let body = match axum::body::to_bytes(request.into_body(), 1024 * 64).await {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid body").into_response(),
+    };
+
+    let payload: CreateSyncRequest = match serde_json::from_slice(&body) {
+        Ok(p) => p,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, format!("Invalid JSON: {}", e)).into_response()
+        }
+    };
+
+    if let Err(e) = validate_relay_id(&payload.id) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
+
+    // Validate target relay exists
+    {
+        let config = state.config.read().await;
+        if !config.relays.contains_key(&payload.relay) {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("Target relay '{}' does not exist", payload.relay),
+            )
+                .into_response();
+        }
+    }
+
+    if payload.remote_relays.is_empty() {
+        return (StatusCode::BAD_REQUEST, "remote_relays cannot be empty").into_response();
+    }
+
+    // Validate authors/authors_from_wot mutual exclusivity
+    if payload.authors.is_some() && payload.authors_from_wot.is_some() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Cannot specify both 'authors' and 'authors_from_wot'",
+        )
+            .into_response();
+    }
+
+    // Validate WoT reference if provided
+    if let Some(ref wot_id) = payload.authors_from_wot {
+        if state.wot_manager.get_set(wot_id).await.is_none() {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("WoT '{}' does not exist", wot_id),
+            )
+                .into_response();
+        }
+    }
+
+    let sync_config = SyncConfig {
+        relay: payload.relay,
+        remote_relays: payload.remote_relays,
+        interval_minutes: payload.interval_minutes,
+        authors: payload.authors,
+        authors_from_wot: payload.authors_from_wot,
+        kinds: payload.kinds,
+        tags: payload.tags,
+        limit: payload.limit,
+    };
+
+    if let Err(e) = state
+        .sync_manager
+        .add_sync(payload.id.clone(), sync_config.clone())
+        .await
+    {
+        return (StatusCode::CONFLICT, e).into_response();
+    }
+
+    let mut config = state.config.write().await;
+    config.syncs.insert(payload.id.clone(), sync_config);
+    if let Err(resp) = save_config(&state, &config).await {
+        return resp;
+    }
+
+    (StatusCode::CREATED, "Sync created").into_response()
+}
+
+#[derive(Deserialize)]
+struct UpdateSyncRequest {
+    relay: String,
+    remote_relays: Vec<String>,
+    #[serde(default = "default_sync_interval_api")]
+    interval_minutes: u64,
+    #[serde(default)]
+    authors: Option<Vec<String>>,
+    #[serde(default)]
+    authors_from_wot: Option<String>,
+    #[serde(default)]
+    kinds: Option<Vec<u64>>,
+    #[serde(default)]
+    tags: Option<HashMap<String, Vec<String>>>,
+    #[serde(default = "default_sync_limit_api")]
+    limit: Option<usize>,
+}
+
+async fn update_sync(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    let body = match axum::body::to_bytes(request.into_body(), 1024 * 64).await {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid body").into_response(),
+    };
+
+    let payload: UpdateSyncRequest = match serde_json::from_slice(&body) {
+        Ok(p) => p,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, format!("Invalid JSON: {}", e)).into_response()
+        }
+    };
+
+    // Validate target relay exists
+    {
+        let config = state.config.read().await;
+        if !config.relays.contains_key(&payload.relay) {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("Target relay '{}' does not exist", payload.relay),
+            )
+                .into_response();
+        }
+    }
+
+    if payload.remote_relays.is_empty() {
+        return (StatusCode::BAD_REQUEST, "remote_relays cannot be empty").into_response();
+    }
+
+    if payload.authors.is_some() && payload.authors_from_wot.is_some() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Cannot specify both 'authors' and 'authors_from_wot'",
+        )
+            .into_response();
+    }
+
+    if let Some(ref wot_id) = payload.authors_from_wot {
+        if state.wot_manager.get_set(wot_id).await.is_none() {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("WoT '{}' does not exist", wot_id),
+            )
+                .into_response();
+        }
+    }
+
+    let sync_config = SyncConfig {
+        relay: payload.relay,
+        remote_relays: payload.remote_relays,
+        interval_minutes: payload.interval_minutes,
+        authors: payload.authors,
+        authors_from_wot: payload.authors_from_wot,
+        kinds: payload.kinds,
+        tags: payload.tags,
+        limit: payload.limit,
+    };
+
+    if let Err(e) = state
+        .sync_manager
+        .update_sync(&id, sync_config.clone())
+        .await
+    {
+        return (StatusCode::NOT_FOUND, e).into_response();
+    }
+
+    let mut config = state.config.write().await;
+    config.syncs.insert(id, sync_config);
+    if let Err(resp) = save_config(&state, &config).await {
+        return resp;
+    }
+
+    (StatusCode::OK, "Sync updated").into_response()
+}
+
+async fn delete_sync(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    if let Err(e) = state.sync_manager.remove_sync(&id).await {
+        return (StatusCode::NOT_FOUND, e).into_response();
+    }
+
+    let mut config = state.config.write().await;
+    config.syncs.remove(&id);
+    if let Err(resp) = save_config(&state, &config).await {
+        return resp;
+    }
+
+    StatusCode::NO_CONTENT.into_response()
+}
+
+async fn trigger_sync(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    match state.sync_manager.trigger_sync(&id).await {
+        Ok(()) => (StatusCode::OK, "Sync triggered").into_response(),
+        Err(e) => (StatusCode::NOT_FOUND, e).into_response(),
+    }
 }
 
 // --- Discovery Relay Handlers ---

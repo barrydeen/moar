@@ -21,6 +21,8 @@ pub struct MoarConfig {
     pub relays: HashMap<String, RelayConfig>,
     #[serde(default)]
     pub blossoms: HashMap<String, BlossomConfig>,
+    #[serde(default)]
+    pub syncs: HashMap<String, SyncConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -215,6 +217,36 @@ impl Default for RateLimitConfig {
             max_connections: Some(5),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Sync (pull events from remote relays) configuration
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncConfig {
+    pub relay: String,
+    pub remote_relays: Vec<String>,
+    #[serde(default = "default_sync_interval")]
+    pub interval_minutes: u64,
+    #[serde(default)]
+    pub authors: Option<Vec<String>>,
+    #[serde(default)]
+    pub authors_from_wot: Option<String>,
+    #[serde(default)]
+    pub kinds: Option<Vec<u64>>,
+    #[serde(default)]
+    pub tags: Option<HashMap<String, Vec<String>>>,
+    #[serde(default = "default_sync_limit")]
+    pub limit: Option<usize>,
+}
+
+fn default_sync_interval() -> u64 {
+    60
+}
+
+fn default_sync_limit() -> Option<usize> {
+    Some(500)
 }
 
 // ---------------------------------------------------------------------------
