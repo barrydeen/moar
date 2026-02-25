@@ -10,4 +10,5 @@ pub mod rate_limit;
 pub mod server;
 pub mod stats;
 pub mod storage;
+pub mod sync;
 pub mod wot;

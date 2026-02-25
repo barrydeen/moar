@@ -5,6 +5,7 @@ use moar::paywall::PaywallManager;
 use moar::policy::PolicyEngine;
 use moar::stats::{RelayStats, TimeSeriesRing};
 use moar::storage::lmdb::LmdbStore;
+use moar::sync::SyncManager;
 use moar::wot::WotManager;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -78,6 +79,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 processed_relays.insert(key, (relay_conf, store, policy, stats, ts_ring));
             }
 
+            // Collect stores for SyncManager
+            let sync_stores: std::collections::HashMap<String, Arc<dyn moar::storage::NostrStore>> = processed_relays
+                .iter()
+                .map(|(k, (_, store, _, _, _))| (k.clone(), store.clone()))
+                .collect();
+
+            let sync_manager = SyncManager::new(
+                config.syncs.clone(),
+                sync_stores,
+                wot_manager.clone(),
+            );
+            sync_manager.start_all().await;
+
             let mut processed_blossoms = std::collections::HashMap::new();
             for (key, blossom_conf) in config.blossoms.clone() {
                 let store = Arc::new(BlobStore::new(&blossom_conf.storage_path)?);
@@ -93,6 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 config_path,
                 wot_manager,
                 paywall_manager,
+                sync_manager,
             )
             .await?;
         }

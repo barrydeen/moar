@@ -33,6 +33,10 @@ impl WotSet {
         self.inner.read().unwrap().len()
     }
 
+    pub fn to_hex_vec(&self) -> Vec<String> {
+        self.inner.read().unwrap().iter().map(|pk| pk.to_hex()).collect()
+    }
+
     fn replace(&self, set: HashSet<PublicKey>) {
         *self.inner.write().unwrap() = set;
     }
