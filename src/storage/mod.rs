@@ -12,3 +12,4 @@ pub trait NostrStore: Send + Sync {
 }
 
 pub mod lmdb;
+pub mod searchable;

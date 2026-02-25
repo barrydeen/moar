@@ -186,3 +186,44 @@ export const syncFormSchema = z
   );
 
 export type SyncFormData = z.infer<typeof syncFormSchema>;
+
+export const crawlFormSchema = z
+  .object({
+    id: idSchema,
+    relay: z.string().min(1, "Target relay is required"),
+    remote_relays: z.string().min(1, "At least one remote relay URL is required"),
+    author_mode: z.enum(["none", "static", "wot"]),
+    authors: z.string().optional(),
+    authors_from_wot: z.string().optional(),
+    kinds: z.string().optional(),
+    since: z.string().min(1, "Start date is required"),
+    until: z.string().optional(),
+    window_hours: z.coerce.number().int().min(1),
+    max_requests_per_second: z.coerce.number().int().min(1),
+    batch_size: z.coerce.number().int().min(1),
+    paused: z.boolean().optional(),
+  })
+  .refine(
+    (data) => {
+      if (data.author_mode === "static") return !!data.authors?.trim();
+      if (data.author_mode === "wot") return !!data.authors_from_wot?.trim();
+      return true;
+    },
+    { message: "Authors are required for the selected mode", path: ["authors"] }
+  );
+
+export type CrawlFormData = z.infer<typeof crawlFormSchema>;
+
+export const relaySearchSchema = z.object({
+  search: z.object({
+    enabled: z.boolean(),
+    index_path: z.string().optional(),
+    wot: z.string().nullable().optional(),
+    heap_size_mb: z.coerce.number().int().min(1),
+    searchable_kinds: z.string().optional(),
+    wot_only: z.boolean(),
+    min_content_length: z.coerce.number().int().min(0),
+  }),
+});
+
+export type RelaySearchData = z.infer<typeof relaySearchSchema>;

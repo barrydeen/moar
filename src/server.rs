@@ -41,6 +41,7 @@ pub struct RelayState {
     pub paywall_id: Option<String>,
     pub stats: Arc<RelayStats>,
     pub ip_tracker: Arc<IpTracker>,
+    pub has_search: bool,
 }
 
 impl RelayState {
@@ -56,6 +57,7 @@ impl RelayState {
         paywall_id: Option<String>,
         stats: Arc<RelayStats>,
         ip_tracker: Arc<IpTracker>,
+        has_search: bool,
     ) -> Self {
         let (tx, _rx) = broadcast::channel(100);
         Self {
@@ -71,6 +73,7 @@ impl RelayState {
             paywall_id,
             stats,
             ip_tracker,
+            has_search,
         }
     }
 }
@@ -282,7 +285,13 @@ fn build_nip11(state: &RelayState) -> Nip11Document {
         description: state.config.description.clone(),
         pubkey,
         contact: nip11.contact.clone(),
-        supported_nips: vec![1, 11, 13],
+        supported_nips: {
+            let mut nips = vec![1, 11, 13];
+            if state.has_search {
+                nips.push(50);
+            }
+            nips
+        },
         software: "https://github.com/barrydeen/moar".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         icon: nip11.icon.clone(),

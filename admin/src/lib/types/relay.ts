@@ -49,6 +49,16 @@ export interface Nip11Config {
   created_at_upper_limit?: number | null;
 }
 
+export interface SearchConfig {
+  enabled: boolean;
+  index_path?: string | null;
+  wot?: string | null;
+  heap_size_mb: number;
+  searchable_kinds?: number[] | null;
+  wot_only: boolean;
+  min_content_length: number;
+}
+
 export interface RelayConfig {
   name: string;
   description?: string | null;
@@ -56,6 +66,7 @@ export interface RelayConfig {
   db_path: string;
   policy: PolicyConfig;
   nip11?: Nip11Config;
+  search?: SearchConfig | null;
 }
 
 export interface Relay {
@@ -66,6 +77,7 @@ export interface Relay {
   db_path: string;
   policy: PolicyConfig;
   nip11?: Nip11Config;
+  search?: SearchConfig | null;
 }
 
 export interface RelayPage {

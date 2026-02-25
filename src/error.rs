@@ -12,6 +12,8 @@ pub enum Error {
     Toml(#[from] toml::ser::Error),
     #[error("Nostr error: {0}")]
     Nostr(#[from] nostr::types::url::ParseError), // approximate placeholder
+    #[error("Internal error: {0}")]
+    Internal(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

@@ -1,12 +1,14 @@
 pub mod auth;
 pub mod blossom;
 pub mod config;
+pub mod crawl;
 pub mod error;
 pub mod gateway;
 pub mod nwc;
 pub mod paywall;
 pub mod policy;
 pub mod rate_limit;
+pub mod search;
 pub mod server;
 pub mod stats;
 pub mod storage;
