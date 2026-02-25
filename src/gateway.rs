@@ -1,7 +1,8 @@
 use crate::auth::verify_auth_event;
 use crate::blossom::handlers::{self as blossom_handlers, BlossomState};
 use crate::blossom::store::BlobStore;
-use crate::config::{BlossomConfig, MoarConfig, PaywallConfig, RelayConfig, SyncConfig, WotConfig};
+use crate::config::{BlossomConfig, CrawlConfig, MoarConfig, PaywallConfig, RelayConfig, SyncConfig, WotConfig};
+use crate::crawl::CrawlManager;
 use crate::paywall::PaywallManager;
 use crate::policy::PolicyEngine;
 use crate::server::{self, RelayState};
@@ -43,6 +44,7 @@ pub struct GatewayState {
     pub wot_manager: Arc<WotManager>,
     pub paywall_manager: Arc<PaywallManager>,
     pub sync_manager: Arc<SyncManager>,
+    pub crawl_manager: Arc<CrawlManager>,
     pub relay_stats: HashMap<String, Arc<RelayStats>>,
     pub time_series: HashMap<String, Arc<RwLock<TimeSeriesRing>>>,
     pub system_stats: SharedSystemStats,
@@ -75,6 +77,7 @@ pub async fn start_gateway(
     wot_manager: Arc<WotManager>,
     paywall_manager: Arc<PaywallManager>,
     sync_manager: Arc<SyncManager>,
+    crawl_manager: Arc<CrawlManager>,
 ) -> crate::error::Result<()> {
     let pages_dir = PathBuf::from(&config.pages_dir);
     // Ensure the pages directory exists
@@ -122,6 +125,7 @@ pub async fn start_gateway(
             });
         }
 
+        let has_search = relay_config.search.as_ref().map_or(false, |s| s.enabled);
         let state = Arc::new(RelayState::new(
             relay_config.clone(),
             store,
@@ -134,6 +138,7 @@ pub async fn start_gateway(
             paywall_id,
             stats,
             ip_tracker,
+            has_search,
         ));
         let app = server::create_relay_router(state);
         router_map.insert(relay_config.subdomain.clone(), app);
@@ -183,6 +188,7 @@ pub async fn start_gateway(
         wot_manager,
         paywall_manager,
         sync_manager,
+        crawl_manager,
         relay_stats: stats_map,
         time_series: ts_map,
         system_stats: system_stats.clone(),
@@ -314,6 +320,13 @@ pub fn admin_router() -> Router<Arc<GatewayState>> {
             get(get_sync).put(update_sync).delete(delete_sync),
         )
         .route("/api/syncs/:id/trigger", post(trigger_sync))
+        .route("/api/crawls", get(list_crawls).post(create_crawl))
+        .route(
+            "/api/crawls/:id",
+            get(get_crawl).put(update_crawl_handler).delete(delete_crawl),
+        )
+        .route("/api/crawls/:id/pause", post(pause_crawl))
+        .route("/api/crawls/:id/resume", post(resume_crawl))
         .route("/api/og", get(og_proxy_handler))
         .route("/api/stats", get(global_stats_handler))
         .route("/api/stats/:relay_id", get(relay_stats_handler))
@@ -1494,6 +1507,310 @@ async fn trigger_sync(
 
     match state.sync_manager.trigger_sync(&id).await {
         Ok(()) => (StatusCode::OK, "Sync triggered").into_response(),
+        Err(e) => (StatusCode::NOT_FOUND, e).into_response(),
+    }
+}
+
+// --- Crawl Handlers ---
+
+async fn list_crawls(
+    State(state): State<Arc<GatewayState>>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    let crawls = state.crawl_manager.list_crawls().await;
+    Json(crawls).into_response()
+}
+
+async fn get_crawl(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    match state.crawl_manager.get_crawl(&id).await {
+        Some(crawl) => Json(crawl).into_response(),
+        None => (StatusCode::NOT_FOUND, "Crawl not found").into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct CreateCrawlRequest {
+    id: String,
+    relay: String,
+    remote_relays: Vec<String>,
+    #[serde(default)]
+    authors_from_wot: Option<String>,
+    #[serde(default)]
+    authors: Option<Vec<String>>,
+    #[serde(default)]
+    kinds: Option<Vec<u64>>,
+    since: u64,
+    until: Option<u64>,
+    #[serde(default = "default_window_hours_api")]
+    window_hours: u64,
+    #[serde(default = "default_max_rps_api")]
+    max_requests_per_second: u32,
+    #[serde(default = "default_batch_size_api")]
+    batch_size: usize,
+    #[serde(default)]
+    paused: bool,
+}
+
+fn default_window_hours_api() -> u64 { 24 }
+fn default_max_rps_api() -> u32 { 5 }
+fn default_batch_size_api() -> usize { 100 }
+
+async fn create_crawl(
+    State(state): State<Arc<GatewayState>>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    let body = match axum::body::to_bytes(request.into_body(), 1024 * 64).await {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid body").into_response(),
+    };
+
+    let payload: CreateCrawlRequest = match serde_json::from_slice(&body) {
+        Ok(p) => p,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, format!("Invalid JSON: {}", e)).into_response()
+        }
+    };
+
+    if let Err(e) = validate_relay_id(&payload.id) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
+
+    // Validate target relay exists
+    {
+        let config = state.config.read().await;
+        if !config.relays.contains_key(&payload.relay) {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("Target relay '{}' does not exist", payload.relay),
+            )
+                .into_response();
+        }
+    }
+
+    if payload.remote_relays.is_empty() {
+        return (StatusCode::BAD_REQUEST, "remote_relays cannot be empty").into_response();
+    }
+
+    if payload.authors.is_some() && payload.authors_from_wot.is_some() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Cannot specify both 'authors' and 'authors_from_wot'",
+        )
+            .into_response();
+    }
+
+    if let Some(ref wot_id) = payload.authors_from_wot {
+        if state.wot_manager.get_set(wot_id).await.is_none() {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("WoT '{}' does not exist", wot_id),
+            )
+                .into_response();
+        }
+    }
+
+    let crawl_config = CrawlConfig {
+        relay: payload.relay,
+        remote_relays: payload.remote_relays,
+        authors_from_wot: payload.authors_from_wot,
+        authors: payload.authors,
+        kinds: payload.kinds,
+        since: payload.since,
+        until: payload.until,
+        window_hours: payload.window_hours,
+        max_requests_per_second: payload.max_requests_per_second,
+        batch_size: payload.batch_size,
+        paused: payload.paused,
+    };
+
+    if let Err(e) = state
+        .crawl_manager
+        .add_crawl(payload.id.clone(), crawl_config.clone())
+        .await
+    {
+        return (StatusCode::CONFLICT, e).into_response();
+    }
+
+    let mut config = state.config.write().await;
+    config.crawls.insert(payload.id.clone(), crawl_config);
+    if let Err(resp) = save_config(&state, &config).await {
+        return resp;
+    }
+
+    (StatusCode::CREATED, "Crawl created").into_response()
+}
+
+#[derive(Deserialize)]
+struct UpdateCrawlRequest {
+    relay: String,
+    remote_relays: Vec<String>,
+    #[serde(default)]
+    authors_from_wot: Option<String>,
+    #[serde(default)]
+    authors: Option<Vec<String>>,
+    #[serde(default)]
+    kinds: Option<Vec<u64>>,
+    since: u64,
+    until: Option<u64>,
+    #[serde(default = "default_window_hours_api")]
+    window_hours: u64,
+    #[serde(default = "default_max_rps_api")]
+    max_requests_per_second: u32,
+    #[serde(default = "default_batch_size_api")]
+    batch_size: usize,
+    #[serde(default)]
+    paused: bool,
+}
+
+async fn update_crawl_handler(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    let body = match axum::body::to_bytes(request.into_body(), 1024 * 64).await {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid body").into_response(),
+    };
+
+    let payload: UpdateCrawlRequest = match serde_json::from_slice(&body) {
+        Ok(p) => p,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, format!("Invalid JSON: {}", e)).into_response()
+        }
+    };
+
+    {
+        let config = state.config.read().await;
+        if !config.relays.contains_key(&payload.relay) {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("Target relay '{}' does not exist", payload.relay),
+            )
+                .into_response();
+        }
+    }
+
+    if payload.remote_relays.is_empty() {
+        return (StatusCode::BAD_REQUEST, "remote_relays cannot be empty").into_response();
+    }
+
+    if payload.authors.is_some() && payload.authors_from_wot.is_some() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Cannot specify both 'authors' and 'authors_from_wot'",
+        )
+            .into_response();
+    }
+
+    if let Some(ref wot_id) = payload.authors_from_wot {
+        if state.wot_manager.get_set(wot_id).await.is_none() {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("WoT '{}' does not exist", wot_id),
+            )
+                .into_response();
+        }
+    }
+
+    let crawl_config = CrawlConfig {
+        relay: payload.relay,
+        remote_relays: payload.remote_relays,
+        authors_from_wot: payload.authors_from_wot,
+        authors: payload.authors,
+        kinds: payload.kinds,
+        since: payload.since,
+        until: payload.until,
+        window_hours: payload.window_hours,
+        max_requests_per_second: payload.max_requests_per_second,
+        batch_size: payload.batch_size,
+        paused: payload.paused,
+    };
+
+    if let Err(e) = state
+        .crawl_manager
+        .update_crawl(&id, crawl_config.clone())
+        .await
+    {
+        return (StatusCode::NOT_FOUND, e).into_response();
+    }
+
+    let mut config = state.config.write().await;
+    config.crawls.insert(id, crawl_config);
+    if let Err(resp) = save_config(&state, &config).await {
+        return resp;
+    }
+
+    (StatusCode::OK, "Crawl updated").into_response()
+}
+
+async fn delete_crawl(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    if let Err(e) = state.crawl_manager.remove_crawl(&id).await {
+        return (StatusCode::NOT_FOUND, e).into_response();
+    }
+
+    let mut config = state.config.write().await;
+    config.crawls.remove(&id);
+    if let Err(resp) = save_config(&state, &config).await {
+        return resp;
+    }
+
+    StatusCode::NO_CONTENT.into_response()
+}
+
+async fn pause_crawl(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    match state.crawl_manager.pause_crawl(&id).await {
+        Ok(()) => (StatusCode::OK, "Crawl paused").into_response(),
+        Err(e) => (StatusCode::NOT_FOUND, e).into_response(),
+    }
+}
+
+async fn resume_crawl(
+    State(state): State<Arc<GatewayState>>,
+    Path(id): Path<String>,
+    request: Request<Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_auth(request.headers(), &state.sessions).await {
+        return resp;
+    }
+
+    match state.crawl_manager.resume_crawl(&id).await {
+        Ok(()) => (StatusCode::OK, "Crawl resumed").into_response(),
         Err(e) => (StatusCode::NOT_FOUND, e).into_response(),
     }
 }

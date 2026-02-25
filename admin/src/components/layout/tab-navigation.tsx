@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { LayoutDashboard, Radio, HardDrive, Shield, Zap, RefreshCw, Settings } from "lucide-react";
+import { LayoutDashboard, Radio, HardDrive, Shield, Zap, RefreshCw, Search, Settings } from "lucide-react";
 
 const tabs = [
   { href: "/admin", label: "Dashboard", icon: LayoutDashboard, exact: true },
@@ -11,6 +11,7 @@ const tabs = [
   { href: "/admin/blossoms", label: "Blossom", icon: HardDrive },
   { href: "/admin/wot", label: "Web of Trust", icon: Shield },
   { href: "/admin/sync", label: "Sync", icon: RefreshCw },
+  { href: "/admin/crawl", label: "Crawl", icon: Search },
   { href: "/admin/paywalls", label: "Paywalls", icon: Zap },
   { href: "/admin/system", label: "System", icon: Settings },
 ];

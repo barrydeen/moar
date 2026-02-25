@@ -43,6 +43,35 @@ impl WotSet {
 }
 
 // ---------------------------------------------------------------------------
+// WotDepthMap — tracks at which depth each pubkey was discovered
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+pub struct WotDepthMap {
+    inner: Arc<std::sync::RwLock<HashMap<PublicKey, u8>>>,
+}
+
+impl WotDepthMap {
+    fn new() -> Self {
+        Self {
+            inner: Arc::new(std::sync::RwLock::new(HashMap::new())),
+        }
+    }
+
+    pub fn get_depth(&self, pk: &PublicKey) -> Option<u8> {
+        self.inner.read().unwrap().get(pk).copied()
+    }
+
+    pub fn to_map(&self) -> HashMap<PublicKey, u8> {
+        self.inner.read().unwrap().clone()
+    }
+
+    fn replace(&self, map: HashMap<PublicKey, u8>) {
+        *self.inner.write().unwrap() = map;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // WotStatus
 // ---------------------------------------------------------------------------
 
@@ -67,6 +96,7 @@ pub enum WotStatus {
 struct WotEntry {
     config: WotConfig,
     set: WotSet,
+    depth_map: WotDepthMap,
     status: Arc<RwLock<WotStatus>>,
     last_updated: Arc<RwLock<Option<u64>>>,
     handle: Option<JoinHandle<()>>,
@@ -89,11 +119,13 @@ impl WotManager {
 
         for (id, config) in wots {
             let set = WotSet::new();
+            let depth_map = WotDepthMap::new();
             entries.insert(
                 id,
                 WotEntry {
                     config,
                     set,
+                    depth_map,
                     status: Arc::new(RwLock::new(WotStatus::Pending)),
                     last_updated: Arc::new(RwLock::new(None)),
                     handle: None,
@@ -154,13 +186,21 @@ impl WotManager {
             }
         }
 
+        // Load depth map from disk if available
+        let depth_disk_path = self.data_dir.join(format!("{}.depths.bin", id));
+        if let Ok(map) = load_depth_map_from_disk(&depth_disk_path).await {
+            entry.depth_map.replace(map);
+        }
+
         let manager = Arc::clone(self);
         let wot_id = id.to_string();
         let config = entry.config.clone();
         let set = entry.set.clone();
+        let depth_map = entry.depth_map.clone();
         let status = Arc::clone(&entry.status);
         let last_updated = Arc::clone(&entry.last_updated);
         let disk_path = self.data_dir.join(format!("{}.bin", id));
+        let depth_disk_path2 = self.data_dir.join(format!("{}.depths.bin", id));
 
         let handle = tokio::spawn(async move {
             loop {
@@ -172,7 +212,7 @@ impl WotManager {
 
                 if should_build {
                     let relays = manager.discovery_relays.read().await.clone();
-                    match build_wot(&config, &relays, &set, &status).await {
+                    match build_wot(&config, &relays, &set, &depth_map, &status).await {
                         Ok(()) => {
                             let now = SystemTime::now()
                                 .duration_since(SystemTime::UNIX_EPOCH)
@@ -185,6 +225,13 @@ impl WotManager {
                                 set.inner.read().unwrap().clone();
                             if let Err(e) = save_pubkeys_to_disk(&disk_path, &pubkeys).await {
                                 tracing::warn!("Failed to save WoT '{}' to disk: {}", wot_id, e);
+                            }
+
+                            // Save depth map to disk
+                            let depths: HashMap<PublicKey, u8> =
+                                depth_map.inner.read().unwrap().clone();
+                            if let Err(e) = save_depth_map_to_disk(&depth_disk_path2, &depths).await {
+                                tracing::warn!("Failed to save WoT '{}' depths to disk: {}", wot_id, e);
                             }
                         }
                         Err(e) => {
@@ -220,6 +267,10 @@ impl WotManager {
         self.entries.read().await.get(id).map(|e| e.set.clone())
     }
 
+    pub async fn get_depth_map(&self, id: &str) -> Option<WotDepthMap> {
+        self.entries.read().await.get(id).map(|e| e.depth_map.clone())
+    }
+
     pub async fn get_status(&self, id: &str) -> Option<WotStatus> {
         let entries = self.entries.read().await;
         let entry = entries.get(id)?;
@@ -252,6 +303,7 @@ impl WotManager {
             WotEntry {
                 config,
                 set: WotSet::new(),
+                depth_map: WotDepthMap::new(),
                 status: Arc::new(RwLock::new(WotStatus::Pending)),
                 last_updated: Arc::new(RwLock::new(None)),
                 handle: None,
@@ -334,6 +386,7 @@ async fn build_wot(
     config: &WotConfig,
     discovery_relays: &[String],
     set: &WotSet,
+    depth_map_out: &WotDepthMap,
     status: &Arc<RwLock<WotStatus>>,
 ) -> Result<(), anyhow::Error> {
     if discovery_relays.is_empty() {
@@ -351,6 +404,8 @@ async fn build_wot(
 
     let mut all_pubkeys: HashSet<PublicKey> = HashSet::new();
     all_pubkeys.insert(seed);
+    let mut depth_map: HashMap<PublicKey, u8> = HashMap::new();
+    depth_map.insert(seed, 0); // seed is depth 0
     let mut current_layer: HashSet<PublicKey> = HashSet::new();
     current_layer.insert(seed);
     let mut queried: HashSet<PublicKey> = HashSet::new();
@@ -409,6 +464,7 @@ async fn build_wot(
                     for pk in followed_pks {
                         if all_pubkeys.insert(pk) {
                             next_layer.insert(pk);
+                            depth_map.entry(pk).or_insert(depth);
                         }
                     }
                 }
@@ -446,6 +502,7 @@ async fn build_wot(
     }
 
     set.replace(all_pubkeys.clone());
+    depth_map_out.replace(depth_map);
     *status.write().await = WotStatus::Ready;
 
     tracing::info!("WoT build complete: {} pubkeys", all_pubkeys.len());
@@ -595,6 +652,42 @@ async fn save_pubkeys_to_disk(
     }
     tokio::fs::write(path, buf).await?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Depth map persistence — binary format (32-byte pubkey + 1-byte depth)
+// ---------------------------------------------------------------------------
+
+async fn save_depth_map_to_disk(
+    path: &Path,
+    depths: &HashMap<PublicKey, u8>,
+) -> Result<(), anyhow::Error> {
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    let mut buf = Vec::with_capacity(depths.len() * 33);
+    for (pk, depth) in depths {
+        buf.extend_from_slice(pk.to_bytes().as_slice());
+        buf.push(*depth);
+    }
+    tokio::fs::write(path, buf).await?;
+    Ok(())
+}
+
+async fn load_depth_map_from_disk(path: &Path) -> Result<HashMap<PublicKey, u8>, anyhow::Error> {
+    let data = tokio::fs::read(path).await?;
+    if data.len() % 33 != 0 {
+        return Err(anyhow::anyhow!("Invalid depth map file size"));
+    }
+    let mut map = HashMap::new();
+    for chunk in data.chunks_exact(33) {
+        let bytes: [u8; 32] = chunk[..32].try_into().unwrap();
+        let depth = chunk[32];
+        if let Ok(pk) = PublicKey::from_slice(&bytes) {
+            map.insert(pk, depth);
+        }
+    }
+    Ok(map)
 }
 
 async fn load_pubkeys_from_disk(path: &Path) -> Result<HashSet<PublicKey>, anyhow::Error> {

@@ -23,6 +23,8 @@ pub struct MoarConfig {
     pub blossoms: HashMap<String, BlossomConfig>,
     #[serde(default)]
     pub syncs: HashMap<String, SyncConfig>,
+    #[serde(default)]
+    pub crawls: HashMap<String, CrawlConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,6 +70,8 @@ pub struct RelayConfig {
     pub policy: PolicyConfig,
     #[serde(default)]
     pub nip11: Nip11Config,
+    #[serde(default)]
+    pub search: Option<SearchConfig>,
 }
 
 /// Optional NIP-11 relay information fields and limit overrides.
@@ -282,4 +286,69 @@ pub struct BlossomListPolicy {
     #[serde(default)]
     pub require_auth: bool,
     pub allowed_pubkeys: Option<Vec<String>>,
+}
+
+// ---------------------------------------------------------------------------
+// Search (NIP-50 full-text search) configuration
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    pub index_path: Option<String>,
+    pub wot: Option<String>,
+    #[serde(default = "default_heap_size_mb")]
+    pub heap_size_mb: usize,
+    pub searchable_kinds: Option<Vec<u64>>,
+    #[serde(default)]
+    pub wot_only: bool,
+    #[serde(default = "default_min_content_length")]
+    pub min_content_length: usize,
+}
+
+fn default_heap_size_mb() -> usize {
+    50
+}
+
+fn default_min_content_length() -> usize {
+    10
+}
+
+// ---------------------------------------------------------------------------
+// Crawl (historical event fetching) configuration
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrawlConfig {
+    pub relay: String,
+    pub remote_relays: Vec<String>,
+    #[serde(default)]
+    pub authors_from_wot: Option<String>,
+    #[serde(default)]
+    pub authors: Option<Vec<String>>,
+    #[serde(default)]
+    pub kinds: Option<Vec<u64>>,
+    pub since: u64,
+    pub until: Option<u64>,
+    #[serde(default = "default_window_hours")]
+    pub window_hours: u64,
+    #[serde(default = "default_max_requests_per_second")]
+    pub max_requests_per_second: u32,
+    #[serde(default = "default_batch_size")]
+    pub batch_size: usize,
+    #[serde(default)]
+    pub paused: bool,
+}
+
+fn default_window_hours() -> u64 {
+    24
+}
+
+fn default_max_requests_per_second() -> u32 {
+    5
+}
+
+fn default_batch_size() -> usize {
+    100
 }

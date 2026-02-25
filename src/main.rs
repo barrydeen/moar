@@ -1,10 +1,13 @@
 use moar::blossom::store::BlobStore;
 use moar::config::MoarConfig;
+use moar::crawl::CrawlManager;
 use moar::gateway::start_gateway;
 use moar::paywall::PaywallManager;
 use moar::policy::PolicyEngine;
+use moar::search::SearchIndex;
 use moar::stats::{RelayStats, TimeSeriesRing};
 use moar::storage::lmdb::LmdbStore;
+use moar::storage::searchable::SearchableStore;
 use moar::sync::SyncManager;
 use moar::wot::WotManager;
 use clap::{Parser, Subcommand};
@@ -55,8 +58,59 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut processed_relays = std::collections::HashMap::new();
 
             for (key, relay_conf) in config.relays.clone() {
-                let store: Arc<dyn moar::storage::NostrStore> =
+                let lmdb_store: Arc<dyn moar::storage::NostrStore> =
                     Arc::new(LmdbStore::new(&relay_conf.db_path)?);
+
+                // Wrap with SearchableStore if search is enabled
+                let store: Arc<dyn moar::storage::NostrStore> =
+                    if let Some(ref search_conf) = relay_conf.search {
+                        if search_conf.enabled {
+                            let index_path = search_conf
+                                .index_path
+                                .clone()
+                                .unwrap_or_else(|| format!("{}.idx", relay_conf.db_path));
+
+                            let kinds = search_conf.searchable_kinds.as_deref();
+                            let search_index = Arc::new(SearchIndex::new_with_kinds(
+                                &index_path,
+                                search_conf.heap_size_mb,
+                                kinds,
+                            )?);
+
+                            // Get WoT depth map if configured
+                            let depth_map = match &search_conf.wot {
+                                Some(wot_id) => wot_manager.get_depth_map(wot_id).await,
+                                None => None,
+                            };
+
+                            let searchable = SearchableStore::new(
+                                lmdb_store,
+                                search_index.clone(),
+                                depth_map,
+                                search_conf.clone(),
+                            );
+
+                            // Spawn background commit task (flush every 5 seconds)
+                            let commit_index = search_index.clone();
+                            tokio::spawn(async move {
+                                let mut interval =
+                                    tokio::time::interval(std::time::Duration::from_secs(5));
+                                loop {
+                                    interval.tick().await;
+                                    if let Err(e) = commit_index.commit().await {
+                                        tracing::warn!("Search index commit error: {}", e);
+                                    }
+                                }
+                            });
+
+                            Arc::new(searchable)
+                        } else {
+                            lmdb_store
+                        }
+                    } else {
+                        lmdb_store
+                    };
+
                 let write_wot = match &relay_conf.policy.write.wot {
                     Some(id) => wot_manager.get_set(id).await,
                     None => None,
@@ -79,7 +133,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 processed_relays.insert(key, (relay_conf, store, policy, stats, ts_ring));
             }
 
-            // Collect stores for SyncManager
+            // Collect stores for SyncManager and CrawlManager
             let sync_stores: std::collections::HashMap<String, Arc<dyn moar::storage::NostrStore>> = processed_relays
                 .iter()
                 .map(|(k, (_, store, _, _, _))| (k.clone(), store.clone()))
@@ -87,10 +141,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let sync_manager = SyncManager::new(
                 config.syncs.clone(),
-                sync_stores,
+                sync_stores.clone(),
                 wot_manager.clone(),
             );
             sync_manager.start_all().await;
+
+            let crawl_manager = CrawlManager::new(
+                config.crawls.clone(),
+                sync_stores,
+                wot_manager.clone(),
+            );
+            crawl_manager.start_all().await;
 
             let mut processed_blossoms = std::collections::HashMap::new();
             for (key, blossom_conf) in config.blossoms.clone() {
@@ -108,6 +169,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 wot_manager,
                 paywall_manager,
                 sync_manager,
+                crawl_manager,
             )
             .await?;
         }

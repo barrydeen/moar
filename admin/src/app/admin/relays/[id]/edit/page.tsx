@@ -8,12 +8,14 @@ import { RelayPoliciesForm } from "@/components/relays/relay-policies-form";
 import { RelayNip11Form } from "@/components/relays/relay-nip11-form";
 import { ImportExport } from "@/components/relays/import-export";
 import { RelayFeed } from "@/components/relays/relay-feed";
+import { RelaySearchForm } from "@/components/relays/relay-search-form";
 import { useRelay } from "@/lib/hooks/use-relays";
 
 const tabs = [
   { key: "settings", label: "Settings" },
   { key: "policies", label: "Policies" },
   { key: "nip11", label: "NIP-11" },
+  { key: "search", label: "Search" },
   { key: "data", label: "Data" },
   { key: "feed", label: "Feed" },
 ];
@@ -49,6 +51,7 @@ export default function EditRelayPage({
       {activeTab === "settings" && <RelaySettingsForm relay={relay} />}
       {activeTab === "policies" && <RelayPoliciesForm relay={relay} />}
       {activeTab === "nip11" && <RelayNip11Form relay={relay} relayId={id} />}
+      {activeTab === "search" && <RelaySearchForm relay={relay} />}
       {activeTab === "data" && <ImportExport relayId={id} />}
       {activeTab === "feed" && <RelayFeed relayId={id} />}
     </div>

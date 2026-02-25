@@ -34,6 +34,7 @@ rand = "0.8"
 qrcode = "0.14"
 sysinfo = "0.33"
 dashmap = "6"
+tantivy = "0.22"
 
 [dev-dependencies]
 tempfile = "3.10"
