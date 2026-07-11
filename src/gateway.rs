@@ -224,7 +224,7 @@ async fn handler(
 ) -> Response {
     let hostname = host.split(':').next().unwrap_or(&host);
 
-    if hostname == state.domain || hostname == "localhost" {
+    if hostname == state.domain || hostname == "localhost" || hostname == &format!("admin.{}", state.domain) {
         let router = admin_router().with_state(state.clone());
         match router.oneshot(request).await {
             Ok(res) => return res,
