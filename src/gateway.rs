@@ -21,6 +21,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -126,6 +127,14 @@ pub async fn start_gateway(
         }
 
         let has_search = relay_config.search.as_ref().map_or(false, |s| s.enabled);
+        let rate_limit_excluded_ips: Vec<IpAddr> = relay_config
+            .policy
+            .rate_limit
+            .excluded_ips
+            .iter()
+            .filter_map(|s| s.parse::<IpAddr>().ok())
+            .collect();
+        let rate_limit_excluded_pubkeys = relay_config.policy.rate_limit.excluded_pubkeys.clone();
         let state = Arc::new(RelayState::new(
             relay_config.clone(),
             store,
@@ -139,6 +148,8 @@ pub async fn start_gateway(
             stats,
             ip_tracker,
             has_search,
+            rate_limit_excluded_ips,
+            rate_limit_excluded_pubkeys,
         ));
         let app = server::create_relay_router(state);
         router_map.insert(relay_config.subdomain.clone(), app);
@@ -224,7 +235,7 @@ async fn handler(
 ) -> Response {
     let hostname = host.split(':').next().unwrap_or(&host);
 
-    if hostname == state.domain || hostname == "localhost" {
+    if hostname == state.domain || hostname == "localhost" || hostname == &format!("admin.{}", state.domain) {
         let router = admin_router().with_state(state.clone());
         match router.oneshot(request).await {
             Ok(res) => return res,
@@ -2627,6 +2638,10 @@ struct RelayStatsResponse {
     bytes_rx: u64,
     bytes_tx: u64,
     storage_bytes: u64,
+    connections_refused: u64,
+    rate_limited_writes: u64,
+    rate_limited_reads: u64,
+    messages_too_large: u64,
 }
 
 fn read_relay_stats(relay_id: &str, stats: &RelayStats) -> RelayStatsResponse {
@@ -2641,6 +2656,10 @@ fn read_relay_stats(relay_id: &str, stats: &RelayStats) -> RelayStatsResponse {
         bytes_rx: stats.bytes_rx.load(Relaxed),
         bytes_tx: stats.bytes_tx.load(Relaxed),
         storage_bytes: stats.storage_bytes.load(Relaxed),
+        connections_refused: stats.connections_refused.load(Relaxed),
+        rate_limited_writes: stats.rate_limited_writes.load(Relaxed),
+        rate_limited_reads: stats.rate_limited_reads.load(Relaxed),
+        messages_too_large: stats.messages_too_large.load(Relaxed),
     }
 }
 
@@ -2652,6 +2671,10 @@ struct GlobalStatsResponse {
     total_storage_bytes: u64,
     total_bytes_rx: u64,
     total_bytes_tx: u64,
+    total_connections_refused: u64,
+    total_rate_limited_writes: u64,
+    total_rate_limited_reads: u64,
+    total_messages_too_large: u64,
     relay_count: usize,
     relays: Vec<RelayStatsResponse>,
     system: crate::stats::SystemStats,
@@ -2676,6 +2699,10 @@ async fn global_stats_handler(
     let mut total_storage: u64 = 0;
     let mut total_rx: u64 = 0;
     let mut total_tx: u64 = 0;
+    let mut total_connections_refused: u64 = 0;
+    let mut total_rate_limited_writes: u64 = 0;
+    let mut total_rate_limited_reads: u64 = 0;
+    let mut total_messages_too_large: u64 = 0;
 
     for (id, stats) in &state.relay_stats {
         let r = read_relay_stats(id, stats);
@@ -2684,6 +2711,10 @@ async fn global_stats_handler(
         total_storage += r.storage_bytes;
         total_rx += r.bytes_rx;
         total_tx += r.bytes_tx;
+        total_connections_refused += r.connections_refused;
+        total_rate_limited_writes += r.rate_limited_writes;
+        total_rate_limited_reads += r.rate_limited_reads;
+        total_messages_too_large += r.messages_too_large;
         relays.push(r);
     }
 
@@ -2696,6 +2727,10 @@ async fn global_stats_handler(
         total_storage_bytes: total_storage,
         total_bytes_rx: total_rx,
         total_bytes_tx: total_tx,
+        total_connections_refused,
+        total_rate_limited_writes,
+        total_rate_limited_reads,
+        total_messages_too_large,
         relay_count: relays.len(),
         relays,
         system,

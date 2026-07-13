@@ -211,6 +211,10 @@ pub struct RateLimitConfig {
     pub writes_per_minute: Option<u32>,
     pub reads_per_minute: Option<u32>,
     pub max_connections: Option<u32>,
+    #[serde(default)]
+    pub excluded_ips: Vec<String>,
+    #[serde(default)]
+    pub excluded_pubkeys: Vec<String>,
 }
 
 impl Default for RateLimitConfig {
@@ -219,6 +223,8 @@ impl Default for RateLimitConfig {
             writes_per_minute: Some(20),
             reads_per_minute: Some(60),
             max_connections: Some(5),
+            excluded_ips: Vec::new(),
+            excluded_pubkeys: Vec::new(),
         }
     }
 }

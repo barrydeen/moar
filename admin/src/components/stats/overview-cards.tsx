@@ -60,6 +60,26 @@ export function OverviewCards({ data, isLoading }: OverviewCardsProps) {
         }
         isLoading={isLoading}
       />
+      <MetricCard
+        label="Conns Refused"
+        value={data ? formatNumber(data.total_connections_refused) : "0"}
+        isLoading={isLoading}
+      />
+      <MetricCard
+        label="Write-Limited"
+        value={data ? formatNumber(data.total_rate_limited_writes) : "0"}
+        isLoading={isLoading}
+      />
+      <MetricCard
+        label="Read-Limited"
+        value={data ? formatNumber(data.total_rate_limited_reads) : "0"}
+        isLoading={isLoading}
+      />
+      <MetricCard
+        label="Msg Too Large"
+        value={data ? formatNumber(data.total_messages_too_large) : "0"}
+        isLoading={isLoading}
+      />
     </div>
   );
 }

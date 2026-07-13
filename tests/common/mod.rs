@@ -115,6 +115,7 @@ pub async fn spawn_relay(policy: PolicyConfig) -> (u16, Arc<MockStore>) {
         db_path: "/tmp/moar-test-unused".into(),
         policy,
         nip11: Default::default(),
+        search: None,
     };
     let state = Arc::new(RelayState::new(
         config,
@@ -128,6 +129,9 @@ pub async fn spawn_relay(policy: PolicyConfig) -> (u16, Arc<MockStore>) {
         None,
         Arc::new(RelayStats::new()),
         Arc::new(moar::rate_limit::IpTracker::new()),
+        false,
+        Vec::new(),
+        Vec::new(),
     ));
     let app = create_relay_router(state);
 

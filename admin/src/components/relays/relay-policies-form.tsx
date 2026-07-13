@@ -400,6 +400,31 @@ export function RelayPoliciesForm({ relay }: RelayPoliciesFormProps) {
             <p className="text-xs text-muted-foreground">Per IP address</p>
           </div>
         </div>
+        <div className="grid grid-cols-2 gap-4 mt-4">
+          <div className="space-y-2">
+            <Label>Excluded IPs</Label>
+            <TagInput
+              values={watch("policy.rate_limit.excluded_ips") || []}
+              onChange={(v) => setValue("policy.rate_limit.excluded_ips", v)}
+              validate={(val) =>
+                /^(\d{1,3}\.){3}\d{1,3}$/.test(val) || /^[0-9a-fA-F:]+$/.test(val)
+                  ? null
+                  : "Must be a valid IPv4 or IPv6 address"
+              }
+              placeholder="e.g. 127.0.0.1"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Excluded Pubkeys</Label>
+            <TagInput
+              values={watch("policy.rate_limit.excluded_pubkeys") || []}
+              onChange={(v) => setValue("policy.rate_limit.excluded_pubkeys", v)}
+              validate={validatePubkey}
+              truncate={true}
+              placeholder="e.g. 5748fbe6..."
+            />
+          </div>
+        </div>
       </CollapsibleSection>
 
       <div className="pt-2">
