@@ -47,6 +47,8 @@ export const relayFormSchema = z.object({
         writes_per_minute: z.coerce.number().int().min(1).nullable().optional(),
         reads_per_minute: z.coerce.number().int().min(1).nullable().optional(),
         max_connections: z.coerce.number().int().min(1).nullable().optional(),
+        excluded_ips: z.array(z.string()).nullable().optional(),
+        excluded_pubkeys: z.array(z.string()).nullable().optional(),
       })
       .nullable()
       .optional(),
@@ -107,6 +109,8 @@ export const relayPoliciesSchema = z.object({
         writes_per_minute: z.coerce.number().int().min(1).nullable().optional(),
         reads_per_minute: z.coerce.number().int().min(1).nullable().optional(),
         max_connections: z.coerce.number().int().min(1).nullable().optional(),
+        excluded_ips: z.array(z.string()).nullable().optional(),
+        excluded_pubkeys: z.array(z.string()).nullable().optional(),
       })
       .nullable()
       .optional(),
