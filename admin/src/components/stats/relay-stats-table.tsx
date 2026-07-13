@@ -35,7 +35,11 @@ export function RelayStatsTable({ relays, isLoading }: RelayStatsTableProps) {
                   <th className="pb-2 pr-4 font-medium text-right">Events</th>
                   <th className="pb-2 pr-4 font-medium text-right">Queries</th>
                   <th className="pb-2 pr-4 font-medium text-right">Storage</th>
-                  <th className="pb-2 font-medium text-right">RX / TX</th>
+                  <th className="pb-2 pr-4 font-medium text-right">RX / TX</th>
+                  <th className="pb-2 pr-4 font-medium text-right">Refused</th>
+                  <th className="pb-2 pr-4 font-medium text-right">Wr-Ltd</th>
+                  <th className="pb-2 pr-4 font-medium text-right">Rd-Ltd</th>
+                  <th className="pb-2 font-medium text-right">Too-Lg</th>
                 </tr>
               </thead>
               <tbody>
@@ -56,8 +60,20 @@ export function RelayStatsTable({ relays, isLoading }: RelayStatsTableProps) {
                     <td className="py-2 pr-4 text-right tabular-nums">
                       {formatSize(relay.storage_bytes)}
                     </td>
-                    <td className="py-2 text-right tabular-nums text-xs">
+                    <td className="py-2 pr-4 text-right tabular-nums text-xs">
                       {formatSize(relay.bytes_rx)} / {formatSize(relay.bytes_tx)}
+                    </td>
+                    <td className="py-2 pr-4 text-right tabular-nums">
+                      {relay.connections_refused}
+                    </td>
+                    <td className="py-2 pr-4 text-right tabular-nums">
+                      {relay.rate_limited_writes}
+                    </td>
+                    <td className="py-2 pr-4 text-right tabular-nums">
+                      {relay.rate_limited_reads}
+                    </td>
+                    <td className="py-2 text-right tabular-nums">
+                      {relay.messages_too_large}
                     </td>
                   </tr>
                 ))}
