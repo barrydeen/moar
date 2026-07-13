@@ -123,11 +123,6 @@ async fn root_handler(
 
     // WebSocket upgrade takes priority
     if let Some(ws) = ws {
-        // Enforce per-IP connection limit
-        let max_conn = state.config.policy.rate_limit.max_connections;
-        if !state.ip_tracker.try_connect(client_ip, max_conn) {
-            return (StatusCode::TOO_MANY_REQUESTS, "rate-limited: too many connections from your IP").into_response();
-        }
         let ip = client_ip;
         return ws.on_upgrade(move |socket| handle_socket(socket, state, ip)).into_response();
     }
@@ -504,6 +499,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<RelayState>, client_ip: IpA
     let (mut sender, mut receiver) = socket.split();
 
     let stats = &state.stats;
+    let max_conn = state.config.policy.rate_limit.max_connections;
+    if !state.ip_tracker.try_connect(client_ip, max_conn) {
+        return;
+    }
     stats.active_connections.fetch_add(1, Relaxed);
     stats.total_connections.fetch_add(1, Relaxed);
     let _guard = ConnectionGuard {

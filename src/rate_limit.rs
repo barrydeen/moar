@@ -100,14 +100,13 @@ impl IpTracker {
         check_rate(&entry.read_timestamps, limit)
     }
 
-    /// Remove entries with 0 connections that have been inactive for over 10
-    /// minutes.
+    /// Remove entries that have been inactive for over 10 minutes,
+    /// regardless of connection count. This prevents leaked connection
+    /// counters (from WebSocket upgrade failures) from permanently
+    /// blocking an IP.
     pub fn cleanup(&self) {
         let cutoff = Instant::now() - Duration::from_secs(600);
         self.map.retain(|_ip, state| {
-            if state.connections.load(Ordering::Relaxed) > 0 {
-                return true;
-            }
             if let Ok(t) = state.last_active.lock() {
                 *t > cutoff
             } else {
