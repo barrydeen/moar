@@ -20,6 +20,10 @@ pub struct RelayStats {
     pub bytes_tx: AtomicU64,
     pub event_count: AtomicU64,
     pub storage_bytes: AtomicU64,
+    pub connections_refused: AtomicU64,
+    pub rate_limited_writes: AtomicU64,
+    pub rate_limited_reads: AtomicU64,
+    pub messages_too_large: AtomicU64,
 }
 
 impl RelayStats {
@@ -34,6 +38,10 @@ impl RelayStats {
             bytes_tx: AtomicU64::new(0),
             event_count: AtomicU64::new(0),
             storage_bytes: AtomicU64::new(0),
+            connections_refused: AtomicU64::new(0),
+            rate_limited_writes: AtomicU64::new(0),
+            rate_limited_reads: AtomicU64::new(0),
+            messages_too_large: AtomicU64::new(0),
         }
     }
 }
@@ -54,6 +62,10 @@ pub struct TimeBucket {
     pub bytes_tx: u64,
     pub event_count: u64,
     pub storage_bytes: u64,
+    pub connections_refused: u64,
+    pub rate_limited_writes: u64,
+    pub rate_limited_reads: u64,
+    pub messages_too_large: u64,
 }
 
 const RING_CAPACITY: usize = 1440; // 24h * 60min
@@ -113,6 +125,10 @@ fn snapshot(stats: &RelayStats) -> TimeBucket {
         bytes_tx: stats.bytes_tx.load(Relaxed),
         event_count: stats.event_count.load(Relaxed),
         storage_bytes: stats.storage_bytes.load(Relaxed),
+        connections_refused: stats.connections_refused.load(Relaxed),
+        rate_limited_writes: stats.rate_limited_writes.load(Relaxed),
+        rate_limited_reads: stats.rate_limited_reads.load(Relaxed),
+        messages_too_large: stats.messages_too_large.load(Relaxed),
     }
 }
 

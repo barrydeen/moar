@@ -123,11 +123,6 @@ async fn root_handler(
 
     // WebSocket upgrade takes priority
     if let Some(ws) = ws {
-        // Enforce per-IP connection limit
-        let max_conn = state.config.policy.rate_limit.max_connections;
-        if !state.ip_tracker.try_connect(client_ip, max_conn) {
-            return (StatusCode::TOO_MANY_REQUESTS, "rate-limited: too many connections from your IP").into_response();
-        }
         let ip = client_ip;
         return ws.on_upgrade(move |socket| handle_socket(socket, state, ip)).into_response();
     }
@@ -504,6 +499,12 @@ async fn handle_socket(socket: WebSocket, state: Arc<RelayState>, client_ip: IpA
     let (mut sender, mut receiver) = socket.split();
 
     let stats = &state.stats;
+    let max_conn = state.config.policy.rate_limit.max_connections;
+    if !state.ip_tracker.try_connect(client_ip, max_conn) {
+        stats.connections_refused.fetch_add(1, Relaxed);
+        tracing::warn!("Connection refused: {} (max {}/IP)", client_ip, max_conn.unwrap_or(0));
+        return;
+    }
     stats.active_connections.fetch_add(1, Relaxed);
     stats.total_connections.fetch_add(1, Relaxed);
     let _guard = ConnectionGuard {
@@ -541,6 +542,8 @@ async fn handle_socket(socket: WebSocket, state: Arc<RelayState>, client_ip: IpA
 
                         // NIP-11: max_message_length check before parsing
                         if text.len() > max_message_length {
+                            stats.messages_too_large.fetch_add(1, Relaxed);
+                            tracing::warn!("Message too large: {} bytes from {} (max {})", text.len(), client_ip, max_message_length);
                             send_msg(&mut sender, RelayMessage::notice(
                                 format!("message too large ({} > {})", text.len(), max_message_length)
                             ).as_json(), stats).await;
@@ -553,6 +556,8 @@ async fn handle_socket(socket: WebSocket, state: Arc<RelayState>, client_ip: IpA
                                     ClientMessage::Event(event) => {
                                         // Per-IP write rate limit
                                         if !state.ip_tracker.check_write_rate(client_ip, rate_limit.writes_per_minute) {
+                                            stats.rate_limited_writes.fetch_add(1, Relaxed);
+                                            tracing::debug!("Write rate-limited: {} ({} writes/min)", client_ip, rate_limit.writes_per_minute.unwrap_or(0));
                                             send_msg(&mut sender, RelayMessage::ok(event.id, false, "rate-limited: too many writes per minute").as_json(), stats).await;
                                             continue;
                                         }
@@ -570,11 +575,12 @@ async fn handle_socket(socket: WebSocket, state: Arc<RelayState>, client_ip: IpA
                                             }
                                             PolicyResult::Deny(reason) => {
                                                 stats.events_rejected.fetch_add(1, Relaxed);
+                                                tracing::warn!("Event rejected from {}: blocked: {}", client_ip, reason);
                                                 send_msg(&mut sender, RelayMessage::ok(event.id, false, &format!("blocked: {}", reason)).as_json(), stats).await;
                                             }
                                             PolicyResult::AuthRequired => {
+                                                tracing::info!("Auth required for event from {}", client_ip);
                                                 send_msg(&mut sender, RelayMessage::ok(event.id, false, "auth-required: NIP-42 authentication required").as_json(), stats).await;
-                                                // TODO: send AUTH challenge
                                             }
                                         }
                                     }
@@ -583,6 +589,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<RelayState>, client_ip: IpA
 
                                         // NIP-11: max_subid_length
                                         if sub_id_str.len() > max_subid_length {
+                                            tracing::warn!("Subscription ID too long from {}: {} chars (max {})", client_ip, sub_id_str.len(), max_subid_length);
                                             send_msg(&mut sender, RelayMessage::notice(
                                                 format!("subscription ID too long ({} > {})", sub_id_str.len(), max_subid_length)
                                             ).as_json(), stats).await;
@@ -591,6 +598,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<RelayState>, client_ip: IpA
 
                                         // NIP-11: max_subscriptions (only count genuinely new subs)
                                         if !active_subs.contains(&sub_id_str) && active_subs.len() >= max_subscriptions {
+                                            tracing::warn!("Too many subscriptions from {} (max {})", client_ip, max_subscriptions);
                                             send_msg(&mut sender, RelayMessage::notice(
                                                 format!("too many subscriptions ({} max)", max_subscriptions)
                                             ).as_json(), stats).await;
@@ -599,6 +607,8 @@ async fn handle_socket(socket: WebSocket, state: Arc<RelayState>, client_ip: IpA
 
                                         // Per-IP read rate limit
                                         if !state.ip_tracker.check_read_rate(client_ip, rate_limit.reads_per_minute) {
+                                            stats.rate_limited_reads.fetch_add(1, Relaxed);
+                                            tracing::debug!("Read rate-limited: {} ({} reads/min)", client_ip, rate_limit.reads_per_minute.unwrap_or(0));
                                             send_msg(&mut sender, RelayMessage::notice("rate-limited: too many reads per minute").as_json(), stats).await;
                                             continue;
                                         }
@@ -609,11 +619,13 @@ async fn handle_socket(socket: WebSocket, state: Arc<RelayState>, client_ip: IpA
                                             match state.policy.can_read(filter, authed_pubkey.as_ref()) {
                                                 PolicyResult::Allow => {}
                                                 PolicyResult::Deny(reason) => {
+                                                    tracing::warn!("Read blocked for {}: {}", client_ip, reason);
                                                     send_msg(&mut sender, RelayMessage::notice(format!("blocked: {}", reason)).as_json(), stats).await;
                                                     blocked = true;
                                                     break;
                                                 }
                                                 PolicyResult::AuthRequired => {
+                                                    tracing::info!("Auth required for read from {}", client_ip);
                                                     send_msg(&mut sender, RelayMessage::notice("auth-required: NIP-42 authentication required").as_json(), stats).await;
                                                     blocked = true;
                                                     break;

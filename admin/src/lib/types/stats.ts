@@ -9,6 +9,10 @@ export interface RelayStatsData {
   bytes_rx: number;
   bytes_tx: number;
   storage_bytes: number;
+  connections_refused: number;
+  rate_limited_writes: number;
+  rate_limited_reads: number;
+  messages_too_large: number;
 }
 
 export interface TimeBucket {
@@ -22,6 +26,10 @@ export interface TimeBucket {
   bytes_tx: number;
   event_count: number;
   storage_bytes: number;
+  connections_refused: number;
+  rate_limited_writes: number;
+  rate_limited_reads: number;
+  messages_too_large: number;
 }
 
 export interface SystemStats {
@@ -39,6 +47,10 @@ export interface GlobalStats {
   total_storage_bytes: number;
   total_bytes_rx: number;
   total_bytes_tx: number;
+  total_connections_refused: number;
+  total_rate_limited_writes: number;
+  total_rate_limited_reads: number;
+  total_messages_too_large: number;
   relay_count: number;
   relays: RelayStatsData[];
   system: SystemStats;
