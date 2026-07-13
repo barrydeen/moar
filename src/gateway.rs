@@ -21,6 +21,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -126,6 +127,14 @@ pub async fn start_gateway(
         }
 
         let has_search = relay_config.search.as_ref().map_or(false, |s| s.enabled);
+        let rate_limit_excluded_ips: Vec<IpAddr> = relay_config
+            .policy
+            .rate_limit
+            .excluded_ips
+            .iter()
+            .filter_map(|s| s.parse::<IpAddr>().ok())
+            .collect();
+        let rate_limit_excluded_pubkeys = relay_config.policy.rate_limit.excluded_pubkeys.clone();
         let state = Arc::new(RelayState::new(
             relay_config.clone(),
             store,
@@ -139,6 +148,8 @@ pub async fn start_gateway(
             stats,
             ip_tracker,
             has_search,
+            rate_limit_excluded_ips,
+            rate_limit_excluded_pubkeys,
         ));
         let app = server::create_relay_router(state);
         router_map.insert(relay_config.subdomain.clone(), app);

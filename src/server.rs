@@ -42,6 +42,8 @@ pub struct RelayState {
     pub stats: Arc<RelayStats>,
     pub ip_tracker: Arc<IpTracker>,
     pub has_search: bool,
+    pub rate_limit_excluded_ips: Vec<IpAddr>,
+    pub rate_limit_excluded_pubkeys: Vec<String>,
 }
 
 impl RelayState {
@@ -58,6 +60,8 @@ impl RelayState {
         stats: Arc<RelayStats>,
         ip_tracker: Arc<IpTracker>,
         has_search: bool,
+        rate_limit_excluded_ips: Vec<IpAddr>,
+        rate_limit_excluded_pubkeys: Vec<String>,
     ) -> Self {
         let (tx, _rx) = broadcast::channel(100);
         Self {
@@ -74,6 +78,8 @@ impl RelayState {
             stats,
             ip_tracker,
             has_search,
+            rate_limit_excluded_ips,
+            rate_limit_excluded_pubkeys,
         }
     }
 }
@@ -499,8 +505,9 @@ async fn handle_socket(socket: WebSocket, state: Arc<RelayState>, client_ip: IpA
     let (mut sender, mut receiver) = socket.split();
 
     let stats = &state.stats;
+    let is_excluded = state.rate_limit_excluded_ips.contains(&client_ip);
     let max_conn = state.config.policy.rate_limit.max_connections;
-    if !state.ip_tracker.try_connect(client_ip, max_conn) {
+    if !is_excluded && !state.ip_tracker.try_connect(client_ip, max_conn) {
         stats.connections_refused.fetch_add(1, Relaxed);
         tracing::warn!("Connection refused: {} (max {}/IP)", client_ip, max_conn.unwrap_or(0));
         return;
@@ -527,6 +534,11 @@ async fn handle_socket(socket: WebSocket, state: Arc<RelayState>, client_ip: IpA
 
     // NIP-42: the authenticated pubkey for this connection (None until AUTH)
     let authed_pubkey: Option<nostr::PublicKey> = None;
+
+    // Skip rate limiting for excluded IPs or pubkeys
+    let skip_rate_limit = is_excluded || authed_pubkey.as_ref().map_or(false, |pk|
+        state.rate_limit_excluded_pubkeys.contains(&pk.to_hex())
+    );
 
     // Track active subscriptions for this connection
     let mut active_subs: HashSet<String> = HashSet::new();
@@ -555,7 +567,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<RelayState>, client_ip: IpA
                                 match client_msg {
                                     ClientMessage::Event(event) => {
                                         // Per-IP write rate limit
-                                        if !state.ip_tracker.check_write_rate(client_ip, rate_limit.writes_per_minute) {
+                                        if !skip_rate_limit && !state.ip_tracker.check_write_rate(client_ip, rate_limit.writes_per_minute) {
                                             stats.rate_limited_writes.fetch_add(1, Relaxed);
                                             tracing::debug!("Write rate-limited: {} ({} writes/min)", client_ip, rate_limit.writes_per_minute.unwrap_or(0));
                                             send_msg(&mut sender, RelayMessage::ok(event.id, false, "rate-limited: too many writes per minute").as_json(), stats).await;
@@ -606,7 +618,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<RelayState>, client_ip: IpA
                                         }
 
                                         // Per-IP read rate limit
-                                        if !state.ip_tracker.check_read_rate(client_ip, rate_limit.reads_per_minute) {
+                                        if !skip_rate_limit && !state.ip_tracker.check_read_rate(client_ip, rate_limit.reads_per_minute) {
                                             stats.rate_limited_reads.fetch_add(1, Relaxed);
                                             tracing::debug!("Read rate-limited: {} ({} reads/min)", client_ip, rate_limit.reads_per_minute.unwrap_or(0));
                                             send_msg(&mut sender, RelayMessage::notice("rate-limited: too many reads per minute").as_json(), stats).await;

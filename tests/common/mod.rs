@@ -130,6 +130,8 @@ pub async fn spawn_relay(policy: PolicyConfig) -> (u16, Arc<MockStore>) {
         Arc::new(RelayStats::new()),
         Arc::new(moar::rate_limit::IpTracker::new()),
         false,
+        Vec::new(),
+        Vec::new(),
     ));
     let app = create_relay_router(state);
 
