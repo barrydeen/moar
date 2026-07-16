@@ -429,6 +429,14 @@ async fn crawl_loop(
             if let Some(ref kinds) = config.kinds {
                 filter.insert("kinds".to_string(), serde_json::json!(kinds));
             }
+            if let Some(ref tags) = config.tags {
+                for (key, values) in tags {
+                    filter.insert(
+                        format!("#{}", key),
+                        serde_json::json!(values),
+                    );
+                }
+            }
             filter.insert("since".to_string(), serde_json::json!(window_start));
             filter.insert("until".to_string(), serde_json::json!(window_end));
 

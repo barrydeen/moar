@@ -1562,6 +1562,8 @@ struct CreateCrawlRequest {
     authors: Option<Vec<String>>,
     #[serde(default)]
     kinds: Option<Vec<u64>>,
+    #[serde(default)]
+    tags: Option<HashMap<String, Vec<String>>>,
     since: u64,
     until: Option<u64>,
     #[serde(default = "default_window_hours_api")]
@@ -1642,6 +1644,7 @@ async fn create_crawl(
         authors_from_wot: payload.authors_from_wot,
         authors: payload.authors,
         kinds: payload.kinds,
+        tags: payload.tags,
         since: payload.since,
         until: payload.until,
         window_hours: payload.window_hours,
@@ -1677,6 +1680,8 @@ struct UpdateCrawlRequest {
     authors: Option<Vec<String>>,
     #[serde(default)]
     kinds: Option<Vec<u64>>,
+    #[serde(default)]
+    tags: Option<HashMap<String, Vec<String>>>,
     since: u64,
     until: Option<u64>,
     #[serde(default = "default_window_hours_api")]
@@ -1749,6 +1754,7 @@ async fn update_crawl_handler(
         authors_from_wot: payload.authors_from_wot,
         authors: payload.authors,
         kinds: payload.kinds,
+        tags: payload.tags,
         since: payload.since,
         until: payload.until,
         window_hours: payload.window_hours,

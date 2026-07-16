@@ -335,6 +335,8 @@ pub struct CrawlConfig {
     pub authors: Option<Vec<String>>,
     #[serde(default)]
     pub kinds: Option<Vec<u64>>,
+    #[serde(default)]
+    pub tags: Option<HashMap<String, Vec<String>>>,
     pub since: u64,
     pub until: Option<u64>,
     #[serde(default = "default_window_hours")]
