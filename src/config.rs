@@ -269,6 +269,7 @@ pub struct BlossomConfig {
     pub description: Option<String>,
     pub subdomain: String,
     pub storage_path: String,
+    pub url: Option<String>,
     #[serde(default)]
     pub policy: BlossomPolicyConfig,
 }
