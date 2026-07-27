@@ -160,11 +160,15 @@ pub async fn start_gateway(
     let mut blossom_store_map = HashMap::new();
 
     for (key, (blossom_config, store)) in blossoms {
-        let scheme = if domain == "localhost" { "http" } else { "https" };
-        let base_url = if domain == "localhost" {
-            format!("{}://{}.{}:{}", scheme, blossom_config.subdomain, domain, port)
+        let base_url = if let Some(url) = &blossom_config.url {
+            url.clone()
         } else {
-            format!("{}://{}.{}", scheme, blossom_config.subdomain, domain)
+            let scheme = if domain == "localhost" { "http" } else { "https" };
+            if domain == "localhost" {
+                format!("{}://{}.{}:{}", scheme, blossom_config.subdomain, domain, port)
+            } else {
+                format!("{}://{}.{}", scheme, blossom_config.subdomain, domain)
+            }
         };
         let blossom_state = BlossomState {
             config: blossom_config.clone(),
@@ -235,16 +239,6 @@ async fn handler(
 ) -> Response {
     let hostname = host.split(':').next().unwrap_or(&host);
 
-    if hostname == state.domain || hostname == "localhost" || hostname == &format!("admin.{}", state.domain) {
-        let router = admin_router().with_state(state.clone());
-        match router.oneshot(request).await {
-            Ok(res) => return res,
-            Err(_) => {
-                return (StatusCode::INTERNAL_SERVER_ERROR, "Admin Router error").into_response()
-            }
-        }
-    }
-
     if let Some(subdomain) = hostname.strip_suffix(&state.domain) {
         let sub = if subdomain.ends_with('.') {
             &subdomain[..subdomain.len() - 1]
@@ -271,13 +265,25 @@ async fn handler(
                 }
             }
         }
+    } else if let Some(sub) = hostname.split('.').next() {
+        if let Some(router) = state.blossom_routers.get(sub) {
+            let router = router.clone();
+            match router.oneshot(request).await {
+                Ok(res) => return res,
+                Err(_) => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "Router error").into_response();
+                }
+            }
+        }
     }
 
-    (
-        StatusCode::NOT_FOUND,
-        format!("Service not found for host: {}", hostname),
-    )
-        .into_response()
+    let router = admin_router().with_state(state.clone());
+    match router.oneshot(request).await {
+        Ok(res) => return res,
+        Err(_) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Admin Router error").into_response()
+        }
+    }
 }
 
 // --- Admin Router ---
@@ -2118,15 +2124,19 @@ async fn list_blossom_media(
             let config = state.config.read().await;
             let base_url = match config.blossoms.get(&id) {
                 Some(cfg) => {
-                    let scheme = if state.domain == "localhost" {
-                        "http"
+                    if let Some(url) = &cfg.url {
+                        url.clone()
                     } else {
-                        "https"
-                    };
-                    if state.domain == "localhost" {
-                        format!("{}://{}.{}:{}", scheme, cfg.subdomain, state.domain, state.port)
-                    } else {
-                        format!("{}://{}.{}", scheme, cfg.subdomain, state.domain)
+                        let scheme = if state.domain == "localhost" {
+                            "http"
+                        } else {
+                            "https"
+                        };
+                        if state.domain == "localhost" {
+                            format!("{}://{}.{}:{}", scheme, cfg.subdomain, state.domain, state.port)
+                        } else {
+                            format!("{}://{}.{}", scheme, cfg.subdomain, state.domain)
+                        }
                     }
                 }
                 None => String::new(),
@@ -2218,15 +2228,19 @@ async fn upload_blossom_media(
             let config = state.config.read().await;
             let base_url = match config.blossoms.get(&id) {
                 Some(cfg) => {
-                    let scheme = if state.domain == "localhost" {
-                        "http"
+                    if let Some(url) = &cfg.url {
+                        url.clone()
                     } else {
-                        "https"
-                    };
-                    if state.domain == "localhost" {
-                        format!("{}://{}.{}:{}", scheme, cfg.subdomain, state.domain, state.port)
-                    } else {
-                        format!("{}://{}.{}", scheme, cfg.subdomain, state.domain)
+                        let scheme = if state.domain == "localhost" {
+                            "http"
+                        } else {
+                            "https"
+                        };
+                        if state.domain == "localhost" {
+                            format!("{}://{}.{}:{}", scheme, cfg.subdomain, state.domain, state.port)
+                        } else {
+                            format!("{}://{}.{}", scheme, cfg.subdomain, state.domain)
+                        }
                     }
                 }
                 None => String::new(),
